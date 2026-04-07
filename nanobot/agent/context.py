@@ -1,10 +1,11 @@
 """Context builder for assembling agent prompts."""
 
+import asyncio
 import base64
 import mimetypes
 import platform
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from nanobot.utils.helpers import current_time_str
 
@@ -13,6 +14,9 @@ from nanobot.utils.prompt_templates import render_template
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, detect_image_mime
 
+if TYPE_CHECKING:
+    from nanobot.agent.reme_adapter import RemeMemoryAdapter
+
 
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
@@ -20,21 +24,37 @@ class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        reme_adapter: "RemeMemoryAdapter | None" = None,
+    ):
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self.reme_adapter = reme_adapter
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        current_query: str | None = None,
+    ) -> str:
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        Args:
+            skill_names: Optional list of skill names to include
+            current_query: Optional current user query for semantic memory retrieval
+        """
         parts = [self._get_identity()]
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
+        # Memory retrieval - prefer ReMe semantic search if available
+        memory = self._get_memory_content(current_query)
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
@@ -49,6 +69,23 @@ class ContextBuilder:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
 
         return "\n\n---\n\n".join(parts)
+
+    def _get_memory_content(self, current_query: str | None = None) -> str:
+        """Get memory content, using semantic retrieval if ReMe is available.
+
+        Args:
+            current_query: Current user message for semantic memory retrieval
+        """
+        if self.reme_adapter:
+            try:
+                # Use semantic retrieval with current query
+                return self.reme_adapter.get_memory_context(current_query)
+            except Exception as e:
+                from loguru import logger
+                logger.warning(f"ReMe retrieval failed, falling back to file memory: {e}")
+
+        # Fallback to file-based memory
+        return self.memory.get_memory_context()
 
     def _get_identity(self) -> str:
         """Get the core identity section."""
@@ -109,7 +146,17 @@ class ContextBuilder:
         chat_id: str | None = None,
         current_role: str = "user",
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Build the complete message list for an LLM call.
+
+        Args:
+            history: Conversation history
+            current_message: Current user message (used for semantic memory retrieval)
+            skill_names: Optional skill names to include
+            media: Optional media files
+            channel: Channel name
+            chat_id: Chat ID
+            current_role: Role of current message sender
+        """
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
         user_content = self._build_user_content(current_message, media)
 
@@ -120,7 +167,8 @@ class ContextBuilder:
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            # Pass current_message for semantic memory retrieval
+            {"role": "system", "content": self.build_system_prompt(skill_names, current_query=current_message)},
             *history,
         ]
         if messages[-1].get("role") == current_role:

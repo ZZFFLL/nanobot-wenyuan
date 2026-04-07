@@ -38,6 +38,7 @@ from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebToolsConfig
     from nanobot.cron.service import CronService
+    from nanobot.agent.reme_adapter import RemeMemoryAdapter
 
 
 class _LoopHook(AgentHook):
@@ -240,6 +241,30 @@ class AgentLoop:
         self._concurrency_gate: asyncio.Semaphore | None = (
             asyncio.Semaphore(_max) if _max > 0 else None
         )
+
+        # Initialize ReMe adapter (load config from external YAML file)
+        self.reme_adapter: "RemeMemoryAdapter | None" = None
+        try:
+            from nanobot.config.reme_loader import load_reme_config
+            from nanobot.agent.reme_adapter import RemeMemoryAdapter
+
+            reme_config = load_reme_config(workspace)
+            if reme_config.enabled:
+                self.reme_adapter = RemeMemoryAdapter(
+                    workspace=workspace,
+                    config=reme_config,
+                    provider=provider,
+                )
+                # Set the adapter on context for retrieval
+                self.context.reme_adapter = self.reme_adapter
+                logger.info("ReMe memory enabled (config from workspace/reme.yaml)")
+            else:
+                logger.info("ReMe memory disabled, using file-based memory")
+        except ImportError:
+            logger.debug("ReMe not installed, using file-based memory")
+        except Exception as e:
+            logger.warning(f"Failed to initialize ReMe: {e}")
+
         self.consolidator = Consolidator(
             store=self.context.memory,
             provider=provider,
@@ -249,6 +274,7 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
+            reme_adapter=self.reme_adapter,
         )
         self.dream = Dream(
             store=self.context.memory,
@@ -395,6 +421,13 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        # Start ReMe if enabled
+        if self.reme_adapter:
+            try:
+                await self.reme_adapter.start()
+            except Exception as e:
+                logger.error(f"Failed to start ReMe: {e}")
+
         self._running = True
         await self._connect_mcp()
         logger.info("Agent loop started")
@@ -484,7 +517,7 @@ class AgentLoop:
                 ))
 
     async def close_mcp(self) -> None:
-        """Drain pending background archives, then close MCP connections."""
+        """Drain pending background archives, then close MCP connections and ReMe."""
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
@@ -494,6 +527,13 @@ class AgentLoop:
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
+
+        # Close ReMe
+        if self.reme_adapter:
+            try:
+                await self.reme_adapter.close()
+            except Exception as e:
+                logger.warning(f"Failed to close ReMe: {e}")
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""

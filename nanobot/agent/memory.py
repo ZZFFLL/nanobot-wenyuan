@@ -22,6 +22,7 @@ from nanobot.utils.gitstore import GitStore
 if TYPE_CHECKING:
     from nanobot.providers.base import LLMProvider
     from nanobot.session.manager import Session, SessionManager
+    from nanobot.agent.reme_adapter import RemeMemoryAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +361,7 @@ class Consolidator:
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
+        reme_adapter: "RemeMemoryAdapter | None" = None,
     ):
         self.store = store
         self.provider = provider
@@ -369,6 +371,7 @@ class Consolidator:
         self.max_completion_tokens = max_completion_tokens
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
+        self.reme_adapter = reme_adapter
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -448,6 +451,36 @@ class Consolidator:
             self.store.raw_archive(messages)
             return True
 
+    async def archive_with_reme(
+        self,
+        messages: list[dict],
+    ) -> bool:
+        """
+        Summarize messages via ReMe and store to vector memory.
+
+        Prefers ReMe, falls back to original LLM summarization on failure.
+
+        Args:
+            messages: Messages to archive
+
+        Returns:
+            True on success (or degraded success), False if nothing to do
+        """
+        if not messages:
+            return False
+
+        # Try using ReMe
+        if self.reme_adapter:
+            try:
+                await self.reme_adapter.summarize_conversation(messages)
+                logger.info("Archived {} messages via ReMe", len(messages))
+                return True
+            except Exception as e:
+                logger.warning("ReMe archive failed, falling back to LLM: {}", e)
+
+        # Fallback to original logic
+        return await self.archive(messages)
+
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
@@ -501,7 +534,7 @@ class Consolidator:
                     source,
                     len(chunk),
                 )
-                if not await self.archive(chunk):
+                if not await self.archive_with_reme(chunk):
                     return
                 session.last_consolidated = end_idx
                 self.sessions.save(session)

@@ -1,0 +1,114 @@
+# =============================================================================
+# ReMe Vector Memory System Configuration
+# =============================================================================
+# This file can be modified at any time - changes take effect on next nanobot start.
+# Place this file in the same directory as config.json (e.g., ~/.nanobot/reme.yaml)
+# =============================================================================
+
+# Enable ReMe memory system (set to false to fall back to file-based memory)
+enabled: true
+
+# -----------------------------------------------------------------------------
+# Basic Configuration
+# -----------------------------------------------------------------------------
+
+# Working directory (stores vector database and cache)
+# Relative to nanobot workspace directory
+working_dir: ".reme"
+
+# -----------------------------------------------------------------------------
+# LLM Configuration (leave empty to auto-inherit from nanobot)
+# -----------------------------------------------------------------------------
+
+llm:
+  # Backend type: openai
+  backend: openai
+  # Model name (leave empty to use nanobot default model)
+  model_name: ""
+  # Override API configuration if needed (uncomment to use)
+  # api_key: ""
+  # base_url: ""
+
+# -----------------------------------------------------------------------------
+# Embedding Configuration
+# -----------------------------------------------------------------------------
+
+embedding:
+  backend: openai
+  model_name: "text-embedding-v4"
+  dimensions: 1024
+  api_key: "sk-y5bBlc7JmNiO2Pr3hsf8domOYVFxnS8xLhnsbac7SH0dzSci"
+  base_url: "http://154.36.158.220:3000/v1"
+
+# -----------------------------------------------------------------------------
+# Vector Store Configuration
+# -----------------------------------------------------------------------------
+
+vector_store:
+  # Backend type: local / chroma / qdrant / elasticsearch / pgvector
+  backend: chroma
+  # Collection name
+  collection_name: "nanobot_memory"
+  # Chroma persistence path (leave empty for default .reme/chroma)
+  persist_directory: ""
+
+# -----------------------------------------------------------------------------
+# Memory Retrieval Configuration
+# -----------------------------------------------------------------------------
+
+retrieval:
+  # Maximum number of memories to return
+  top_k: 10
+  # Enable time-based filtering
+  enable_time_filter: true
+  # Similarity threshold (0-1, higher is stricter)
+  similarity_threshold: 0.5
+
+# -----------------------------------------------------------------------------
+# Memory Type Configuration
+# -----------------------------------------------------------------------------
+
+memory_types:
+  # Personal memory: user preferences, habits, personal info
+  personal:
+    enabled: true
+    # Maximum stored count (0 = unlimited)
+    max_memories: 0
+
+  # Procedural memory: task execution experience, success/failure patterns
+  procedural:
+    enabled: true
+    max_memories: 0
+
+  # Tool memory: tool usage experience, parameter tuning
+  tool:
+    enabled: true
+    max_memories: 0
+
+# -----------------------------------------------------------------------------
+# Profile File Configuration (compatible with existing nanobot files)
+# -----------------------------------------------------------------------------
+
+profile:
+  # Enable Profile file synchronization
+  enabled: true
+  # Sync Profile to SOUL.md, USER.md, MEMORY.md files
+  sync_to_files: true
+  # Profile file paths (relative to workspace)
+  soul_file: "SOUL.md"
+  user_file: "USER.md"
+  memory_file: "memory/MEMORY.md"
+
+# -----------------------------------------------------------------------------
+# Advanced Configuration
+# -----------------------------------------------------------------------------
+
+advanced:
+  # Enable memory deduplication
+  deduplication: true
+  # Memory expiration days (0 = never expire)
+  expiration_days: 0
+  # Batch processing size
+  batch_size: 20
+  # Enable debug logging
+  debug: false

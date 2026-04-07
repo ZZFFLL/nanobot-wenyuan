@@ -313,6 +313,144 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
+    """
+    Manage ReMe memory.
+
+    Usage:
+        /memory list          - List all memories
+        /memory search <query> - Search memories
+        /memory add <content>  - Add memory
+        /memory delete <id>    - Delete memory
+        /memory clear          - Clear all memories
+        /memory status         - Show ReMe health status
+    """
+    loop = ctx.loop
+    if not loop.reme_adapter:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="ReMe memory system is not enabled. Add reme.yaml to workspace to enable.",
+        )
+
+    parts = ctx.raw.split(maxsplit=2)
+    action = parts[1] if len(parts) > 1 else "list"
+
+    # Get adapter status for debugging
+    adapter_status = loop.reme_adapter.get_status()
+
+    try:
+        if action == "status":
+            # Show detailed health status
+            lines = ["## ReMe Memory Status\n"]
+            lines.append(f"- **Started**: {adapter_status['started']}")
+            lines.append(f"- **Healthy**: {adapter_status['healthy']}")
+            lines.append(f"- **Circuit Open**: {adapter_status['circuit_open']}")
+            lines.append(f"- **Failure Count**: {adapter_status['failure_count']}/{loop.reme_adapter.MAX_FAILURES}")
+            if adapter_status['last_error']:
+                lines.append(f"- **Last Error**: {adapter_status['last_error']}")
+            if adapter_status['last_failure_time']:
+                from datetime import datetime
+                ts = datetime.fromtimestamp(adapter_status['last_failure_time'])
+                lines.append(f"- **Last Failure Time**: {ts.strftime('%Y-%m-%d %H:%M:%S')}")
+            content = "\n".join(lines)
+
+        elif action == "list":
+            # Check circuit breaker first
+            if adapter_status['circuit_open']:
+                content = (
+                    "⚠️ ReMe is currently unavailable (circuit breaker open).\n"
+                    f"Last error: {adapter_status['last_error']}\n"
+                    "Try `/memory status` for more details."
+                )
+            else:
+                memories = await loop.reme_adapter.list_memories(limit=20)
+                if not memories:
+                    content = "No memories found."
+                else:
+                    lines = ["## Memories\n"]
+                    for m in memories:
+                        content_preview = m.content[:100] + "..." if len(m.content) > 100 else m.content
+                        lines.append(f"- `{m.memory_id[:8]}` {content_preview}")
+                    content = "\n".join(lines)
+
+        elif action == "search":
+            if len(parts) < 3:
+                content = "Usage: /memory search <query>"
+            elif adapter_status['circuit_open']:
+                content = (
+                    "⚠️ ReMe is currently unavailable (circuit breaker open).\n"
+                    f"Last error: {adapter_status['last_error']}"
+                )
+            else:
+                query = parts[2]
+                result = await loop.reme_adapter.retrieve_memory(query)
+                if result:
+                    content = f"## Search Results\n\n{result}"
+                else:
+                    content = "No matching memories found."
+
+        elif action == "add":
+            if len(parts) < 3:
+                content = "Usage: /memory add <content>"
+            elif adapter_status['circuit_open']:
+                content = (
+                    "⚠️ ReMe is currently unavailable (circuit breaker open).\n"
+                    f"Last error: {adapter_status['last_error']}"
+                )
+            else:
+                content_text = parts[2]
+                node = await loop.reme_adapter.add_memory(content_text)
+                if node:
+                    content = f"✅ Memory added: {content_text[:50]}..."
+                else:
+                    content = "❌ Failed to add memory. Check `/memory status` for details."
+
+        elif action == "delete":
+            if len(parts) < 3:
+                content = "Usage: /memory delete <memory_id>"
+            elif adapter_status['circuit_open']:
+                content = (
+                    "⚠️ ReMe is currently unavailable (circuit breaker open).\n"
+                    f"Last error: {adapter_status['last_error']}"
+                )
+            else:
+                memory_id = parts[2]
+                success = await loop.reme_adapter.delete_memory(memory_id)
+                if success:
+                    content = f"✅ Memory deleted: {memory_id}"
+                else:
+                    content = f"❌ Failed to delete memory: {memory_id}"
+
+        elif action == "clear":
+            if adapter_status['circuit_open']:
+                content = (
+                    "⚠️ ReMe is currently unavailable (circuit breaker open).\n"
+                    f"Last error: {adapter_status['last_error']}"
+                )
+            else:
+                count = await loop.reme_adapter.delete_all_memories()
+                content = f"✅ Cleared {count} memories."
+
+        else:
+            content = (
+                f"Unknown action: {action}\n"
+                "Usage: /memory [list|search|add|delete|clear|status]"
+            )
+    except Exception as e:
+        # Log the full error for debugging
+        import traceback
+        from loguru import logger
+        logger.error(f"/memory command error: {e}\n{traceback.format_exc()}")
+        content = f"❌ Error: {type(e).__name__}: {e}\nTry `/memory status` for details."
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+    )
+
+
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
     lines = [
@@ -324,6 +462,7 @@ def build_help_text() -> str:
         "/dream — Manually trigger Dream consolidation",
         "/dream-log — Show what the last Dream changed",
         "/dream-restore — Revert memory to a previous state",
+        "/memory — Manage ReMe vector memory (list/search/add/delete/clear)",
         "/help — Show available commands",
     ]
     return "\n".join(lines)
@@ -341,4 +480,6 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/dream-log ", cmd_dream_log)
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
+    router.exact("/memory", cmd_memory)
+    router.prefix("/memory ", cmd_memory)
     router.exact("/help", cmd_help)
