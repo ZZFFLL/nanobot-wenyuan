@@ -349,5 +349,193 @@
 
 ---
 
+## 问题分析：2026-04-08 记忆检索异常
+
+### 问题现象
+
+用户发送 "你叫什么名字" 后，系统陷入"黑洞"状态：
+- 响应延迟超过 100 秒
+- 日志中出现多次检索调用
+- 出现超时错误和成功记录交替
+
+### 日志时间线分析
+
+| 时间 | 事件 | 耗时 |
+|------|------|------|
+| 00:55:52 | 用户发送 "你叫什么名字" | - |
+| 00:55:52 | 第一次 ReMe 检索开始，context=`[token-probe]` | - |
+| 00:56:32 | 第一次检索完成 | 40.24s |
+| 00:56:32 | **记录超时错误** (30s timeout) | - |
+| 00:56:32 | 第二次 ReMe 检索开始，context="你叫什么名字" | - |
+| 00:57:16 | 第二次检索完成 | 43.34s |
+| 00:57:16 | 记录成功 + **同时记录超时错误** | - |
+| 00:57:32 | 响应发送给用户 | - |
+| 00:57:32 | 第三次 ReMe 检索开始，context=`[token-probe]` | - |
+| 00:58:09 | 第三次检索完成，nanobot 关闭 | 37.5s |
+
+**总响应时间**: 约 100 秒（从 00:55:52 到 00:57:32）
+
+### 根因分析
+
+#### 问题 1: `[token-probe]` 探测消息
+
+- `[token-probe]` 不是用户输入，是 nanobot 内部生成的探测消息
+- 可能用于检测记忆系统是否工作
+- 导致同一用户消息触发了多次检索
+
+**推测来源**: 需要在 nanobot 代码中查找 `[token-probe]` 的生成位置
+
+#### 问题 2: 超时竞态条件
+
+```
+00:56:32 | ReMeRetriever.call | ========== cost=40.244988s ==========
+00:56:32 | WARNING | _record_failure | TimeoutError: Memory retrieval timed out after 30s
+00:57:16 | INFO | _record_success | ReMe operation succeeded, circuit breaker RESET
+00:57:16 | WARNING | _record_failure | TimeoutError: Memory retrieval timed out after 30s
+```
+
+**问题**:
+1. 检索实际耗时 40+ 秒
+2. 30 秒超时在后台任务完成前触发
+3. 后台任务完成后又记录成功
+4. 状态混乱，断路器逻辑可能失效
+
+#### 问题 3: ReMe 多阶段检索耗时过长
+
+ReMe 内部检索流程：
+
+```
+Phase 1: 语义搜索
+  - 执行 5 个不同 query 并行检索
+  - 每个 query 调用 Embedding API (~2.5s)
+  
+Phase 2: 更多检索（可选）
+  - 又执行 5 个 query
+  - 又调用 Embedding API (~2.3s)
+  
+Phase 3: 历史深挖
+  - 读取历史对话 (~0.001s)
+  
+LLM Reasoning（每个阶段前后）
+  - 每次约 5-9 秒
+  - 共 4-5 次 LLM 调用
+```
+
+**总耗时**:
+- PersonalRetriever: 27-37 秒
+- ReMeRetriever: 37-43 秒（包含 PersonalRetriever + 额外 LLM 调用）
+
+#### 问题 4: 同步阻塞
+
+`get_memory_context()` 是同步方法，在事件循环中阻塞：
+- 使用 `ThreadPoolExecutor` + `future.result()` 阻塞等待
+- 阻塞期间无法处理其他消息
+- 用户感知为"卡住"
+
+#### 问题 5: 事件循环关闭警告
+
+```
+00:58:09 | WARNING | loop.py:536 | Failed to close ReMe: Event loop is closed
+```
+
+异步关闭时事件循环已关闭，需要改进关闭逻辑。
+
+### 待讨论解决方案
+
+| 方案 | 描述 | 优点 | 缺点 | 工作量 |
+|------|------|------|------|--------|
+| A: 简化检索 | 只做 Phase 1，跳过 Phase 2/3 | 大幅加速 | 可能遗漏记忆 | 配置调整 |
+| B: 减少 top_k | 从 10 改为 3 | 略微加速 | 结果可能不完整 | 配置调整 |
+| C: 异步缓存 | 后台异步检索，下次对话使用缓存 | 不阻塞 | 复杂，首次仍慢 | 中等 |
+| D: 快速模式 | 简单问题跳过记忆检索 | 大幅加速 | 需要判断逻辑 | 中等 |
+| E: 超时默认值 | 超时返回空，不等待完成 | 用户体验好 | 可能丢失记忆 | 小 |
+| F: 查明 token-probe | 找到源头并修复 | 解决根本问题 | 需要排查 | 未知 |
+| G: 优化 ReMe | 提 PR 给 ReMe 优化检索流程 | 治本 | 上游依赖 | 大 |
+
+### 建议优先级
+
+1. **立即**: 查明 `[token-probe]` 源头并修复（问题 F）
+2. **短期**: 实现超时快速返回 + 简化检索配置（方案 A + E）
+3. **中期**: 实现异步缓存机制（方案 C）
+4. **长期**: 考虑向 ReMe 提交优化 PR（方案 G）
+
+---
+
+## 问题修复：2026-04-08 深夜
+
+### 修复内容
+
+#### 1. `[token-probe]` 根因定位
+
+**源头**：`nanobot/agent/memory.py:411`
+
+```python
+def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+    """Estimate current prompt size for the normal session history view."""
+    history = session.get_history(max_messages=0)
+    channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+    probe_messages = self._build_messages(
+        history=history,
+        current_message="[token-probe]",  # <-- 这里！
+        channel=channel,
+        chat_id=chat_id,
+    )
+```
+
+**调用链**：
+```
+estimate_session_prompt_tokens()  # token 估算
+  → _build_messages(current_message="[token-probe]")
+    → ContextBuilder.build_messages()
+      → build_system_prompt(current_query="[token-probe]")
+        → _get_memory_content("[token-probe]")
+          → reme_adapter.get_memory_context("[token-probe]")
+            → ReMe 检索！40秒！
+```
+
+**问题本质**：token 估算不应该触发记忆检索
+
+#### 2. 修复方案
+
+**修复 1**：`nanobot/agent/context.py` - 跳过探测消息
+
+```python
+def _get_memory_content(self, current_query: str | None = None) -> str:
+    # CRITICAL: Skip memory retrieval for token estimation probes
+    if current_query == "[token-probe]":
+        return ""
+    # 正常检索...
+```
+
+**修复 2**：`nanobot/agent/reme_adapter.py` - 死循环保护机制
+
+新增三层保护：
+
+| 保护层 | 参数 | 作用 |
+|--------|------|------|
+| 递归检测 | `_retrieval_in_progress` | 检测检索中再次调用检索 |
+| 最小间隔 | `MIN_RETRIEVAL_INTERVAL = 5s` | 两次检索最少间隔 5 秒 |
+| 频率限制 | `MAX_RETRIEVALS_PER_MINUTE = 10` | 每分钟最多 10 次检索 |
+
+新增方法：
+- `_check_dead_loop()` - 检测死循环条件
+- `_begin_retrieval()` - 标记检索开始
+- `_end_retrieval()` - 标记检索结束
+- `_get_memory_context_async_internal()` - 内部检索方法（不含死循环检测）
+
+#### 3. 修复后效果
+
+| 场景 | 修复前 | 修复后 |
+|------|--------|--------|
+| token 估算 | 触发 40 秒检索 | 直接返回空 |
+| 递归检索 | 无限循环 | 立即跳过 |
+| 频繁检索 | 无限制 | 5s 间隔 + 每分钟 10 次 |
+
+### 相关日志文件
+
+- `logs/2026-04-08_00-54-31.log` - 完整日志（216 行）
+
+---
+
 **记录人**: Claude Code
 **最后更新**: 2026-04-08 晚间

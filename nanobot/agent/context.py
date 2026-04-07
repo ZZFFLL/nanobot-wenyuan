@@ -75,7 +75,19 @@ class ContextBuilder:
 
         Args:
             current_query: Current user message for semantic memory retrieval
+
+        Important:
+            - Skips retrieval for "[token-probe]" which is an internal estimation probe
+            - Never triggers retrieval during token estimation to prevent infinite loops
         """
+        # CRITICAL: Skip memory retrieval for token estimation probes
+        # "[token-probe]" is used by Consolidator.estimate_session_prompt_tokens()
+        # to estimate token count. Retrieval here would cause:
+        # 1. Unnecessary 40-60s delay during estimation
+        # 2. Potential infinite loops when estimation triggers consolidation
+        if current_query == "[token-probe]":
+            return ""
+
         if self.reme_adapter:
             try:
                 # Use semantic retrieval with current query

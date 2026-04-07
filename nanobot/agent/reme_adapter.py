@@ -33,6 +33,12 @@ class RemeMemoryAdapter:
     - Graceful degradation: falls back to empty result on failure
     - Clear error logging: tracks last error and failure count for debugging
 
+    Dead Loop Protection:
+    - Global retrieval lock: prevents concurrent retrievals
+    - Min interval: prevents rapid-fire retrievals (5 seconds)
+    - Max retrievals per minute: prevents infinite loops (10 retrievals)
+    - Recursive detection: detects when retrieval is called during retrieval
+
     Important:
     - ReMe retrieval is a complex multi-phase process involving multiple LLM calls
     - Typical retrieval takes 30-60 seconds for semantic search + temporal filtering
@@ -42,6 +48,11 @@ class RemeMemoryAdapter:
     # Circuit breaker thresholds
     MAX_FAILURES = 3  # After this many failures, circuit opens
     RECOVERY_TIMEOUT = 60  # Seconds before attempting recovery
+
+    # Dead loop protection
+    MIN_RETRIEVAL_INTERVAL = 5.0  # Minimum seconds between retrievals
+    MAX_RETRIEVALS_PER_MINUTE = 10  # Maximum retrievals in 60 second window
+
     # Note: ReMe retrieval takes 30-60s, no timeout on retrieval operations
     # Only use timeout for explicit async operations in sync context
 
@@ -74,9 +85,61 @@ class RemeMemoryAdapter:
         self._last_failure_time: float | None = None
         self._circuit_open = False
 
+        # Dead loop protection state
+        self._retrieval_in_progress = False
+        self._last_retrieval_time: float = 0.0
+        self._retrieval_times: list[float] = []  # Track recent retrieval times
+
     # =========================================================================
     # Circuit breaker and error handling
     # =========================================================================
+
+    def _check_dead_loop(self) -> tuple[bool, str]:
+        """
+        Check for potential dead loop conditions.
+
+        Returns:
+            Tuple of (should_skip: bool, reason: str)
+        """
+        now = time.time()
+
+        # 1. Check for recursive retrieval (retrieval called during retrieval)
+        if self._retrieval_in_progress:
+            reason = "Recursive retrieval detected - retrieval already in progress"
+            logger.error(f"DEAD LOOP PREVENTED: {reason}")
+            return True, reason
+
+        # 2. Check minimum interval between retrievals
+        elapsed = now - self._last_retrieval_time
+        if elapsed < self.MIN_RETRIEVAL_INTERVAL:
+            reason = f"Too soon since last retrieval ({elapsed:.1f}s < {self.MIN_RETRIEVAL_INTERVAL}s)"
+            logger.warning(f"Rate limited: {reason}")
+            return True, reason
+
+        # 3. Check max retrievals per minute
+        # Clean up old entries (older than 60 seconds)
+        self._retrieval_times = [t for t in self._retrieval_times if now - t < 60.0]
+        if len(self._retrieval_times) >= self.MAX_RETRIEVALS_PER_MINUTE:
+            reason = f"Too many retrievals ({len(self._retrieval_times)} in last minute)"
+            logger.error(f"DEAD LOOP PREVENTED: {reason}")
+            # Force open circuit breaker
+            self._circuit_open = True
+            self._healthy = False
+            self._last_error = reason
+            self._last_failure_time = now
+            return True, reason
+
+        return False, ""
+
+    def _begin_retrieval(self) -> None:
+        """Mark retrieval as started."""
+        self._retrieval_in_progress = True
+        self._last_retrieval_time = time.time()
+        self._retrieval_times.append(self._last_retrieval_time)
+
+    def _end_retrieval(self) -> None:
+        """Mark retrieval as ended."""
+        self._retrieval_in_progress = False
 
     def _record_failure(self, error: Exception, operation: str) -> None:
         """Record a failure and update circuit breaker state."""
@@ -366,6 +429,7 @@ class RemeMemoryAdapter:
         We simply pass the query to ReMe and let its LLM handle the retrieval strategy.
 
         Error handling:
+        - Dead loop protection: prevents recursive/repeated retrievals
         - Circuit breaker check before operation
         - Never throws - returns empty string on failure
         - Records failures for debugging
@@ -376,6 +440,12 @@ class RemeMemoryAdapter:
         Returns:
             Formatted memory context string (empty on failure)
         """
+        # Dead loop protection - CRITICAL
+        should_skip, reason = self._check_dead_loop()
+        if should_skip:
+            logger.warning(f"Skipping memory retrieval: {reason}")
+            return ""
+
         # Circuit breaker check - skip if circuit is open
         if not self._check_circuit():
             logger.debug("ReMe circuit breaker open, skipping memory retrieval")
@@ -384,6 +454,7 @@ class RemeMemoryAdapter:
         if not query:
             query = "用户偏好 项目信息 重要记忆"
 
+        self._begin_retrieval()
         try:
             memories = await self._reme.retrieve_memory(
                 query=query,
@@ -399,6 +470,8 @@ class RemeMemoryAdapter:
             # Return empty string instead of throwing - graceful degradation
             logger.warning(f"Memory retrieval failed, returning empty context: {e}")
             return ""
+        finally:
+            self._end_retrieval()
 
     def get_memory_context(self, query: str | None = None) -> str:
         """Get memory context (for ContextBuilder).
@@ -410,6 +483,7 @@ class RemeMemoryAdapter:
         - NO TIMEOUT: Let ReMe complete its retrieval strategy
 
         Error handling:
+        - Dead loop protection: prevents recursive/repeated retrievals
         - Never throws - returns empty string on any failure
         - Logs detailed error for debugging
         - Uses circuit breaker to prevent cascading failures
@@ -421,11 +495,18 @@ class RemeMemoryAdapter:
             logger.warning("ReMe not started, returning empty memory context")
             return ""
 
+        # Dead loop protection - CRITICAL
+        should_skip, reason = self._check_dead_loop()
+        if should_skip:
+            logger.warning(f"Skipping memory retrieval: {reason}")
+            return ""
+
         # Circuit breaker check
         if not self._check_circuit():
             logger.debug("ReMe circuit breaker open, skipping memory retrieval")
             return ""
 
+        self._begin_retrieval()
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -433,19 +514,41 @@ class RemeMemoryAdapter:
                 # and typically takes 30-60 seconds for multi-phase retrieval
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
-                        asyncio.run, self.get_memory_context_async(query)
+                        asyncio.run, self._get_memory_context_async_internal(query)
                     )
                     # No timeout - let ReMe complete its full retrieval strategy
                     # Circuit breaker will handle repeated failures
-                    logger.debug(f"ReMe retrieval started for query: {query[:50]}...")
+                    logger.debug(f"ReMe retrieval started for query: {query[:50] if query else 'default'}...")
                     result = future.result()
                     logger.debug(f"ReMe retrieval completed")
                     return result
             else:
-                return loop.run_until_complete(self.get_memory_context_async(query))
+                return loop.run_until_complete(self._get_memory_context_async_internal(query))
         except Exception as e:
             self._record_failure(e, "get_memory_context")
             logger.warning(f"Failed to get memory context: {e}")
+            return ""
+        finally:
+            self._end_retrieval()
+
+    async def _get_memory_context_async_internal(self, query: str | None = None) -> str:
+        """Internal async retrieval without dead loop checks (already done by caller)."""
+        if not query:
+            query = "用户偏好 项目信息 重要记忆"
+
+        try:
+            memories = await self._reme.retrieve_memory(
+                query=query,
+                user_name=self._default_user_id,
+                retrieve_top_k=self.config.retrieve_top_k,
+            )
+            self._record_success()
+            if memories:
+                return f"## Long-term Memory\n{memories}"
+            return ""
+        except Exception as e:
+            self._record_failure(e, "retrieve_memory")
+            logger.warning(f"Memory retrieval failed, returning empty context: {e}")
             return ""
 
     # =========================================================================
