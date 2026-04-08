@@ -71,32 +71,25 @@ class ContextBuilder:
         return "\n\n---\n\n".join(parts)
 
     def _get_memory_content(self, current_query: str | None = None) -> str:
-        """Get memory content, using semantic retrieval if ReMe is available.
+        """Get memory content from file-based storage.
 
         Args:
-            current_query: Current user message for semantic memory retrieval
+            current_query: Current user message (unused, kept for API compatibility)
 
         Important:
             - Skips retrieval for "[token-probe]" which is an internal estimation probe
-            - Never triggers retrieval during token estimation to prevent infinite loops
+            - ReMe semantic retrieval is now available via retrieve_memory tool
+            - This method only returns file-based memory (MEMORY.md) for fast access
+
+        The LLM can use the retrieve_memory tool for semantic search when needed.
         """
         # CRITICAL: Skip memory retrieval for token estimation probes
         # "[token-probe]" is used by Consolidator.estimate_session_prompt_tokens()
-        # to estimate token count. Retrieval here would cause:
-        # 1. Unnecessary 40-60s delay during estimation
-        # 2. Potential infinite loops when estimation triggers consolidation
         if current_query == "[token-probe]":
             return ""
 
-        if self.reme_adapter:
-            try:
-                # Use semantic retrieval with current query
-                return self.reme_adapter.get_memory_context(current_query)
-            except Exception as e:
-                from loguru import logger
-                logger.warning(f"ReMe retrieval failed, falling back to file memory: {e}")
-
-        # Fallback to file-based memory
+        # Always use file-based memory (fast, <1ms)
+        # ReMe semantic retrieval is available via retrieve_memory tool
         return self.memory.get_memory_context()
 
     def _get_identity(self) -> str:

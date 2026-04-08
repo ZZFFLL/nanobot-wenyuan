@@ -311,6 +311,10 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
+        # Register ReMe memory tools if adapter is available
+        if self.reme_adapter:
+            from nanobot.agent.tools.memory import register_memory_tools
+            register_memory_tools(self.tools, self.reme_adapter)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
