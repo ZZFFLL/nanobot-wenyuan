@@ -578,8 +578,8 @@ class RemeMemoryAdapter:
             logger.warning("Circuit breaker open, skipping conversation summarization")
             return []
 
-        # Convert message format
-        formatted_messages = self._format_messages_for_reme(messages)
+        # Convert and compress message format
+        formatted_messages = await self._format_messages_for_reme(messages)
 
         # Build kwargs
         kwargs = {}
@@ -596,7 +596,9 @@ class RemeMemoryAdapter:
                 **kwargs,
             )
             self._record_success()
-            logger.info(f"Summarized {len(messages)} messages into memory")
+            logger.info(
+                f"Summarized {len(messages)} messages (compressed to {len(formatted_messages)}) into memory"
+            )
             return result
         except Exception as e:
             self._record_failure(e, "summarize_conversation")
@@ -797,15 +799,35 @@ class RemeMemoryAdapter:
     # Utility methods
     # =========================================================================
 
-    def _format_messages_for_reme(self, messages: list[dict]) -> list[dict]:
+    async def _format_messages_for_reme(self, messages: list[dict]) -> list[dict]:
         """
-        Convert nanobot message format to ReMe format.
+        Convert nanobot message format to ReMe format with compression.
 
         ReMe requires:
         - role: "user" | "assistant"
         - content: str
         - time_created: str (YYYY-MM-DD HH:MM:SS)
+
+        Compression strategy:
+        1. Split messages into blocks
+        2. Each block is compressed via LLM summary
+        3. Returns compressed message list
         """
+
+        def convert_timestamp(ts: str) -> str:
+            """Convert ISO timestamp to ReMe format (YYYY-MM-DD HH:MM:SS)."""
+            if not ts:
+                return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Handle ISO format: 2026-04-10T00:23:59.406550
+            if "T" in ts:
+                # Remove microseconds and replace T with space
+                parts = ts.split("T")
+                date_part = parts[0]
+                time_part = parts[1].split(".")[0]  # Remove microseconds
+                return f"{date_part} {time_part}"
+            return ts
+
+        # Step 1: Filter and convert to standard format
         formatted = []
         for msg in messages:
             role = msg.get("role", "")
@@ -828,12 +850,262 @@ class RemeMemoryAdapter:
             formatted.append({
                 "role": role,
                 "content": content,
-                "time_created": msg.get(
-                    "timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                ),
+                "time_created": convert_timestamp(msg.get("timestamp", "")),
             })
 
-        return formatted
+        if not formatted:
+            return []
+
+        # Step 2: Check if compression is enabled
+        if not self.config.compression_enabled:
+            logger.debug(f"Compression disabled, returning {len(formatted)} formatted messages")
+            return formatted
+
+        # Step 3: Compress messages
+        logger.info(f"Compression enabled, processing {len(formatted)} messages")
+        compressed = await self._compress_messages(formatted)
+        return compressed
+
+    async def _compress_messages(self, messages: list[dict]) -> list[dict]:
+        """
+        Compress messages using block-based summarization.
+
+        Flow:
+        1. Split into blocks based on block_size
+        2. Auto-split blocks that exceed token limit
+        3. Compress each block in parallel
+        4. Return compressed message list
+        """
+        config = self.config
+        block_size = config.compression_block_size
+        context_window = config.summarizer_context_window
+        max_output_tokens = config.summarizer_max_output_tokens
+        input_reserved = config.compression.input_reserved_tokens
+
+        # Calculate max tokens per block
+        max_tokens_per_block = context_window - max_output_tokens - input_reserved
+
+        logger.info(
+            f"Starting compression: {len(messages)} messages, "
+            f"block_size={block_size}, max_tokens_per_block={max_tokens_per_block}"
+        )
+
+        # Step 1: Initial split by block_size
+        initial_blocks = []
+        for i in range(0, len(messages), block_size):
+            initial_blocks.append(messages[i:i + block_size])
+
+        # Step 2: Token validation and auto-split
+        final_blocks = []
+        for block in initial_blocks:
+            final_blocks.extend(self._ensure_block_within_limit(block, max_tokens_per_block))
+
+        logger.info(f"Split into {len(final_blocks)} blocks after token validation")
+
+        # Step 3: Compress each block in parallel
+        summaries = await self._compress_blocks_parallel(final_blocks)
+
+        # Step 4: Build compressed message list
+        compressed_messages = []
+        for i, summary in enumerate(summaries):
+            block = final_blocks[i]
+            first_time = block[0].get("time_created", "")
+            last_time = block[-1].get("time_created", "")
+
+            compressed_messages.append({
+                "role": "user",
+                "content": f"[时段摘要 {first_time} ~ {last_time}]\n{summary}",
+                "time_created": first_time,
+            })
+
+        logger.info(
+            f"Compression complete: {len(messages)} messages → {len(compressed_messages)} summaries"
+        )
+
+        return compressed_messages
+
+    def _ensure_block_within_limit(self, block: list[dict], max_tokens: int) -> list[list[dict]]:
+        """
+        Ensure block is within token limit, auto-split if needed.
+
+        Returns list of blocks (may be multiple if split was needed).
+        """
+        block_tokens = self._estimate_block_tokens(block)
+
+        if block_tokens <= max_tokens:
+            return [block]
+
+        # Block exceeds limit, need to split
+        # If block has only 1 message, truncate it
+        if len(block) == 1:
+            logger.warning(
+                f"Single message exceeds token limit ({block_tokens} > {max_tokens}), truncating"
+            )
+            return [self._truncate_block_messages(block, max_tokens)]
+
+        # Calculate how many sub-blocks needed
+        num_sub_blocks = (block_tokens + max_tokens - 1) // max_tokens  # ceil
+
+        # Calculate sub-block size
+        sub_block_size = max(1, (len(block) + num_sub_blocks - 1) // num_sub_blocks)  # ceil, min 1
+
+        logger.debug(
+            f"Block exceeds limit ({block_tokens} > {max_tokens}), "
+            f"splitting {len(block)} messages into {num_sub_blocks} sub-blocks"
+        )
+
+        # Split into sub-blocks
+        sub_blocks = []
+        for i in range(0, len(block), sub_block_size):
+            sub_block = block[i:i + sub_block_size]
+            # Check if this sub-block has only 1 message - if so, check if we need to truncate
+            if len(sub_block) == 1:
+                sub_tokens = self._estimate_block_tokens(sub_block)
+                if sub_tokens > max_tokens:
+                    sub_blocks.append(self._truncate_block_messages(sub_block, max_tokens))
+                    continue
+            # Recursive check for multi-message blocks
+            sub_blocks.extend(self._ensure_block_within_limit(sub_block, max_tokens))
+
+        return sub_blocks
+
+    def _truncate_block_messages(self, block: list[dict], max_tokens: int) -> list[dict]:
+        """Truncate messages in block to fit within token limit."""
+        logger.debug(f"Truncating block of {len(block)} messages to {max_tokens} tokens")
+        truncated = []
+        remaining_tokens = max_tokens
+
+        for msg in block:
+            msg_tokens = self._estimate_message_tokens(msg)
+
+            if msg_tokens <= remaining_tokens:
+                truncated.append(msg)
+                remaining_tokens -= msg_tokens
+            else:
+                # Truncate this message
+                available_chars = (remaining_tokens - 20) * 2  # Reserve 20 for overhead
+                if available_chars > 100:
+                    original_len = len(msg.get("content", ""))
+                    truncated_content = msg.get("content", "")[:available_chars]
+                    truncated.append({
+                        "role": msg.get("role"),
+                        "content": truncated_content + "...[内容过长已截断]",
+                        "time_created": msg.get("time_created"),
+                    })
+                    logger.info(
+                        f"Truncated message: {original_len} chars -> {len(truncated_content)} chars"
+                    )
+                    remaining_tokens = 0
+                break
+
+        return truncated
+
+    def _estimate_block_tokens(self, block: list[dict]) -> int:
+        """Estimate total tokens for a block of messages."""
+        return sum(self._estimate_message_tokens(msg) for msg in block)
+
+    def _estimate_message_tokens(self, msg: dict) -> int:
+        """Estimate token count for a single message."""
+        content = msg.get("content", "")
+        # Mixed content estimate: ~2 chars per token
+        char_count = len(content)
+        estimated = char_count // 2
+        # Message structure overhead
+        overhead = 20
+        return estimated + overhead
+
+    async def _compress_blocks_parallel(self, blocks: list[list[dict]]) -> list[str]:
+        """Compress multiple blocks in parallel using LLM."""
+        import asyncio
+
+        tasks = [self._compress_single_block(block) for block in blocks]
+        summaries = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = []
+        for i, summary in enumerate(summaries):
+            if isinstance(summary, Exception):
+                logger.warning(f"Block {i} compression failed: {summary}")
+                # Fallback: use first 500 chars of first message
+                fallback = blocks[i][0].get("content", "")[:500]
+                results.append(fallback)
+            else:
+                results.append(summary)
+
+        return results
+
+    async def _compress_single_block(self, block: list[dict]) -> str:
+        """Compress a single block into a summary using LLM."""
+        # Build prompt
+        block_content = self._format_block_for_summary(block)
+        block_tokens = self._estimate_block_tokens(block)
+
+        prompt = f"""请将以下对话片段压缩为简洁的摘要，保留关键信息：
+
+1. 用户的重要陈述和偏好
+2. 重要决策和结论
+3. 关键事件和行动
+
+对话内容：
+{block_content}
+
+请用简洁的中文总结，控制在300字以内："""
+
+        try:
+            logger.debug(f"Compressing block: {len(block)} messages, ~{block_tokens} tokens")
+            # Use the LLM configured for compression
+            response = await self._call_summarizer_llm(prompt)
+            logger.debug(f"Block compressed: {len(response)} chars")
+            return response
+        except Exception as e:
+            logger.error(f"Failed to compress block: {e}")
+            raise
+
+    def _format_block_for_summary(self, block: list[dict]) -> str:
+        """Format block messages for summarization prompt."""
+        lines = []
+        for i, msg in enumerate(block):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            time_created = msg.get("time_created", "")
+
+            # Limit content length for prompt
+            if len(content) > 500:
+                content = content[:500] + "..."
+
+            lines.append(f"[{time_created}] {role}: {content}")
+
+        return "\n".join(lines)
+
+    async def _call_summarizer_llm(self, prompt: str) -> str:
+        """Call the summarizer LLM with the given prompt."""
+        from openai import AsyncOpenAI
+
+        config = self.config
+        llm_config = config.get_compression_llm_config()
+
+        logger.debug(
+            f"Calling summarizer LLM: model={llm_config['model_name']}, "
+            f"max_tokens={llm_config['max_output_tokens']}, "
+            f"temp={llm_config['temperature']}"
+        )
+
+        client = AsyncOpenAI(
+            api_key=llm_config["api_key"],
+            base_url=llm_config["base_url"],
+        )
+
+        try:
+            response = await client.chat.completions.create(
+                model=llm_config["model_name"],
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=llm_config["max_output_tokens"],
+                temperature=llm_config["temperature"],
+            )
+            result = response.choices[0].message.content or ""
+            logger.debug(f"Summarizer LLM response: {len(result)} chars")
+            return result
+        finally:
+            await client.close()
 
     @property
     def reme(self) -> "ReMe":

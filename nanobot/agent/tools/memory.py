@@ -62,8 +62,9 @@ class RetrieveMemoryTool(Tool):
     Note: Retrieval takes a few seconds. Only call when genuinely needed.
     """
 
-    def __init__(self, adapter: RemeMemoryAdapter):
+    def __init__(self, adapter: RemeMemoryAdapter, get_user_name: Callable[[], str] = _default_get_user_name):
         self._adapter = adapter
+        self._get_user_name = get_user_name
 
     @property
     def name(self) -> str:
@@ -72,9 +73,12 @@ class RetrieveMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Retrieve relevant memories from long-term storage using semantic search. "
-            "Use when you need to recall user preferences, past conversations, or stored information. "
-            "Takes a few seconds - only use when needed."
+            "Search your long-term memory for stored information about the user. "
+            "This is the PRIMARY way to recall: user preferences, names, past conversations, "
+            "relationships, habits, and any facts previously mentioned. "
+            "Use this tool whenever the user asks about something they told you before, "
+            "or when context from previous conversations would be helpful. "
+            "Do NOT use read_file/grep to search memory files - use this tool instead."
         )
 
     @property
@@ -90,7 +94,8 @@ class RetrieveMemoryTool(Tool):
             )
 
         try:
-            result = await self._adapter.retrieve_memory(query, top_k=top_k)
+            user_id = self._get_user_name()
+            result = await self._adapter.retrieve_memory(query, user_id=user_id, top_k=top_k)
             if not result:
                 return "No relevant memories found."
             return result
@@ -143,9 +148,11 @@ class AddMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Store important information in long-term memory. "
-            "Use when user shares personal info, preferences, or important facts. "
-            "Be selective - only store genuinely important information."
+            "Store important information into your long-term memory. "
+            "Use this tool when: user shares personal info (name, age, location, job), "
+            "user tells you preferences or habits, user says 'remember this' or 'note this down', "
+            "important decisions or agreements are made. "
+            "Do NOT write to memory files directly - use this tool instead."
         )
 
     @property
@@ -202,8 +209,9 @@ class ListMemoriesTool(Tool):
     Returns the most recently added memories.
     """
 
-    def __init__(self, adapter: RemeMemoryAdapter):
+    def __init__(self, adapter: RemeMemoryAdapter, get_user_name: Callable[[], str] = _default_get_user_name):
         self._adapter = adapter
+        self._get_user_name = get_user_name
 
     @property
     def name(self) -> str:
@@ -212,8 +220,11 @@ class ListMemoriesTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "List recent memories stored in long-term memory. "
-            "Use when user asks what you remember or need to see stored information."
+            "List all memories stored in your long-term memory. "
+            "This is the PRIMARY way to see what you know about the user. "
+            "Use when: user asks 'what do you remember about me', you need to review "
+            "stored information, or before using retrieve_memory to understand what's available. "
+            "Do NOT read memory files directly - use this tool instead."
         )
 
     @property
@@ -229,7 +240,8 @@ class ListMemoriesTool(Tool):
             )
 
         try:
-            memories = await self._adapter.list_memories(limit=limit)
+            user_id = self._get_user_name()
+            memories = await self._adapter.list_memories(user_id=user_id, limit=limit)
             if not memories:
                 return "No memories stored yet."
 
@@ -390,8 +402,8 @@ def register_memory_tools(
         adapter: RemeMemoryAdapter instance
         get_user_name: Callable that returns the current user's name for memory attribution
     """
-    registry.register(RetrieveMemoryTool(adapter))
+    registry.register(RetrieveMemoryTool(adapter, get_user_name))
     registry.register(AddMemoryTool(adapter, get_user_name))
-    registry.register(ListMemoriesTool(adapter))
+    registry.register(ListMemoriesTool(adapter, get_user_name))
     registry.register(GetMemoryStatusTool(adapter))
     registry.register(DeleteMemoryTool(adapter))

@@ -112,3 +112,25 @@ advanced:
   batch_size: 20
   # Enable debug logging
   debug: false
+
+# -----------------------------------------------------------------------------
+# Compression Configuration (for large conversations)
+# -----------------------------------------------------------------------------
+
+compression:
+  # Enable message compression before passing to ReMe
+  enabled: true
+  # Messages per block (auto-split if exceeds token limit)
+  block_size: 10
+
+  # Summarizer LLM configuration
+  summarizer_llm:
+    # Model context window (128k default)
+    context_window: 131072
+    # Max output tokens per block summary
+    max_output_tokens: 2048
+    # Lower temperature = more concise summaries
+    temperature: 0.3
+
+  # Reserved tokens for prompt structure
+  input_reserved_tokens: 500

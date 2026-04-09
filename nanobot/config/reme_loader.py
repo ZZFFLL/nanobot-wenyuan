@@ -79,6 +79,23 @@ class RemeAdvancedConfig(BaseModel):
     debug: bool = False
 
 
+class RemeSummarizerLLMConfig(BaseModel):
+    """LLM configuration for compression summarizer."""
+
+    context_window: int = 131072  # 128k
+    max_output_tokens: int = 2048
+    temperature: float = 0.3
+
+
+class RemeCompressionConfig(BaseModel):
+    """Message compression configuration for large conversations."""
+
+    enabled: bool = True
+    block_size: int = 10  # Messages per block (auto-split if exceeds token limit)
+    summarizer_llm: RemeSummarizerLLMConfig = Field(default_factory=RemeSummarizerLLMConfig)
+    input_reserved_tokens: int = 500  # Reserved for prompt structure
+
+
 class RemeConfig(BaseModel):
     """Complete ReMe configuration loaded from YAML file."""
 
@@ -92,6 +109,7 @@ class RemeConfig(BaseModel):
     memory_types: RemeMemoryTypesConfig = Field(default_factory=RemeMemoryTypesConfig)
     profile: RemeProfileConfig = Field(default_factory=RemeProfileConfig)
     advanced: RemeAdvancedConfig = Field(default_factory=RemeAdvancedConfig)
+    compression: RemeCompressionConfig = Field(default_factory=RemeCompressionConfig)
 
     # Runtime-filled fields (inherited from nanobot)
     _inherited_llm_model: str = ""
@@ -207,6 +225,37 @@ class RemeConfig(BaseModel):
     @property
     def enable_tool_memory(self) -> bool:
         return self.memory_types.tool.enabled
+
+    @property
+    def compression_enabled(self) -> bool:
+        return self.compression.enabled
+
+    @property
+    def compression_block_size(self) -> int:
+        return self.compression.block_size
+
+    @property
+    def summarizer_context_window(self) -> int:
+        return self.compression.summarizer_llm.context_window
+
+    @property
+    def summarizer_max_output_tokens(self) -> int:
+        return self.compression.summarizer_llm.max_output_tokens
+
+    @property
+    def summarizer_temperature(self) -> float:
+        return self.compression.summarizer_llm.temperature
+
+    def get_compression_llm_config(self) -> dict[str, Any]:
+        """Get LLM config for compression summarizer."""
+        return {
+            "model_name": self.llm.model_name or self._inherited_llm_model,
+            "api_key": self.llm.api_key or self._inherited_api_key,
+            "base_url": self.llm.base_url or self._inherited_base_url,
+            "context_window": self.compression.summarizer_llm.context_window,
+            "max_output_tokens": self.compression.summarizer_llm.max_output_tokens,
+            "temperature": self.compression.summarizer_llm.temperature,
+        }
 
 
 def load_reme_config(workspace: Path, nanobot_config: dict | None = None) -> RemeConfig:
