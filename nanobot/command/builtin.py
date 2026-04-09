@@ -332,6 +332,7 @@ async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
             content="ReMe memory system is not enabled. Add reme.yaml to workspace to enable.",
+        )
 
     # Extract user name from USER.md for consistent memory attribution
     def get_user_name() -> str:
