@@ -71,58 +71,90 @@ class SoulEngine:
             return self.soul_config.emotion_model.temperature
         return 0.3
 
+    MAX_HEART_RETRIES: int = 2
+
     async def update_heart(self, user_msg: str, ai_msg: str) -> bool:
-        """Use LLM to analyze conversation and update HEART.md. Returns True on success."""
+        """Use LLM to analyze conversation and update HEART.md. Returns True on success.
+
+        Retries up to MAX_HEART_RETRIES times on JSON parse failure,
+        then preserves the current HEART.md unchanged.
+        """
         current_heart = self.heart.read()
         if current_heart is None:
             return False
 
         heart_text = self.heart.render_markdown(current_heart)
+        user_content = (
+            f"## 你刚才的内心\n{heart_text}\n\n"
+            f"## 刚才的对话\n"
+            f"[用户] {user_msg}\n"
+            f"[数字生命] {ai_msg}\n\n"
+            f"安静下来，感受自己内心的变化，输出更新后的完整 JSON 情感状态。"
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_HEART_UPDATE},
+            {"role": "user", "content": user_content},
+        ]
 
-        try:
-            response = await self.provider.chat_with_retry(
-                model=self.emotion_model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT_HEART_UPDATE},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"## 你刚才的内心\n{heart_text}\n\n"
-                            f"## 刚才的对话\n"
-                            f"[用户] {user_msg}\n"
-                            f"[数字生命] {ai_msg}\n\n"
-                            f"安静下来，感受自己内心的变化，输出更新后的完整 JSON 情感状态。"
-                        ),
-                    },
-                ],
-            )
-        except Exception:
-            logger.exception("SoulEngine: LLM call failed")
-            return False
+        for attempt in range(1 + self.MAX_HEART_RETRIES):
+            try:
+                response = await self.provider.chat_with_retry(
+                    model=self.emotion_model,
+                    messages=messages,
+                )
+            except Exception:
+                logger.exception("SoulEngine: LLM call failed (attempt {}/{})", attempt + 1, 1 + self.MAX_HEART_RETRIES)
+                continue
 
-        content = (response.content or "").strip()
-        json_str = self._extract_json(content)
-        if not json_str:
-            logger.warning("SoulEngine: LLM output cannot be parsed as JSON")
-            return False
+            content = (response.content or "").strip()
+            logger.debug("SoulEngine: LLM raw output ({} chars): {}", len(content), content[:500])
 
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            logger.warning("SoulEngine: JSON parse failed")
-            return False
+            json_str = self._extract_json(content)
+            if not json_str:
+                logger.warning("SoulEngine: cannot extract JSON from output (attempt {}/{}), raw: {}", attempt + 1, 1 + self.MAX_HEART_RETRIES, content[:300])
+                continue
 
-        return self.heart.write(data)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning("SoulEngine: JSON parse failed (attempt {}/{}): {}, extracted: {}", attempt + 1, 1 + self.MAX_HEART_RETRIES, e, json_str[:300])
+                continue
+
+            return self.heart.write(data)
+
+        logger.warning("SoulEngine: all {} attempts failed, preserving current HEART.md", 1 + self.MAX_HEART_RETRIES)
+        return False
 
     @staticmethod
     def _extract_json(text: str) -> str | None:
-        """Extract JSON from LLM output (handle code block wrapping)."""
+        """Extract JSON from LLM output (handle code block wrapping, trailing text, etc.)."""
         text = text.strip()
-        if text.startswith("{"):
-            return text
+
+        # 1. Try extracting from code block first (most reliable)
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
+
+        # 2. Find the first balanced {…} in the text
+        #    This handles cases where LLM outputs: {"key": "value"} some extra text
+        #    or: Some thinking... {"key": "value"}
+        depth = 0
+        start = None
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start is not None:
+                    candidate = text[start : i + 1]
+                    return candidate
+
+        # 3. Fallback: starts with { but not balanced — return as-is
+        if text.startswith("{"):
+            return text
+
         return None
 
     def get_heart_context(self) -> str | None:

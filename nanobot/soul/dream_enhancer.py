@@ -184,11 +184,44 @@ class SoulDreamEnhancer:
 
     @staticmethod
     def _extract_json(text: str) -> str | None:
-        """Extract JSON from LLM output (handle code block wrapping)."""
+        """Extract JSON from LLM output (handle code block wrapping, trailing text, etc.)."""
         text = text.strip()
-        if text.startswith("[") or text.startswith("{"):
-            return text
+
+        # 1. Try extracting from code block first
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
+
+        # 2. Determine expected container type from first bracket found
+        #    and find the first balanced match
+        first_brace = len(text)
+        first_bracket = len(text)
+        for i, ch in enumerate(text):
+            if ch == "{":
+                first_brace = i
+                break
+        for i, ch in enumerate(text):
+            if ch == "[":
+                first_bracket = i
+                break
+
+        # Try whichever comes first
+        order = [("{", "}"), ("[", "]")] if first_brace <= first_bracket else [("[", "]"), ("{", "}")]
+
+        for open_ch, close_ch in order:
+            depth = 0
+            start = None
+            for i, ch in enumerate(text):
+                if ch == open_ch:
+                    if depth == 0:
+                        start = i
+                    depth += 1
+                elif ch == close_ch:
+                    depth -= 1
+                    if depth == 0 and start is not None:
+                        return text[start : i + 1]
+
+        # 3. Fallback
+        if text.startswith("[") or text.startswith("{"):
+            return text
         return None

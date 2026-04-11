@@ -128,11 +128,28 @@ class EvolutionEngine:
 
     @staticmethod
     def _extract_json(text: str) -> str | None:
-        """Extract JSON from LLM output (handle code block wrapping)."""
+        """Extract JSON from LLM output (handle code block wrapping, trailing text, etc.)."""
         text = text.strip()
-        if text.startswith("{"):
-            return text
+
+        # 1. Try extracting from code block first
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
+
+        # 2. Find the first balanced {…} in the text
+        depth = 0
+        start = None
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start is not None:
+                    return text[start : i + 1]
+
+        # 3. Fallback
+        if text.startswith("{"):
+            return text
         return None
