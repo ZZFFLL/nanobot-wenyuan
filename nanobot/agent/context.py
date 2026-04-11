@@ -68,13 +68,32 @@ class ContextBuilder:
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
+        # Read digital life name from IDENTITY.md (if soul system is active)
+        ai_name = self._read_ai_name()
+
         return render_template(
             "agent/identity.md",
             workspace_path=workspace_path,
             runtime=runtime,
+            ai_name=ai_name,
             platform_policy=render_template("agent/platform_policy.md", system=system),
             channel=channel or "",
         )
+
+    def _read_ai_name(self) -> str:
+        """Read AI name from IDENTITY.md. Returns empty string if not found."""
+        identity_file = self.workspace / "IDENTITY.md"
+        if not identity_file.exists():
+            return ""
+        try:
+            text = identity_file.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                line = line.strip()
+                if line.lower().startswith("name:"):
+                    return line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        return ""
 
     @staticmethod
     def _build_runtime_context(

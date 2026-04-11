@@ -1513,7 +1513,7 @@ def soul_init(
     console.print("[green]✓[/green] IDENTITY.md created")
 
     # Create SOUL.md
-    soul = f"# 性格\n\n{personality}\n\n# 对用户的初印象\n\n{relationship}\n"
+    soul = f"# {name}的灵魂\n\n## 性格\n\n{personality}\n\n## 对用户的初印象\n\n{relationship}\n"
     (ws / "SOUL.md").write_text(soul, encoding="utf-8")
     console.print("[green]✓[/green] SOUL.md created")
 
