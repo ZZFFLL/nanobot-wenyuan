@@ -78,9 +78,13 @@ class SoulMemoryWriterConfig(Base):
 class SoulProactiveConfig(Base):
     """Proactive behavior configuration."""
 
-    min_interval_s: int = 900      # Shortest check interval (15 min)
-    max_interval_s: int = 7200     # Longest check interval (2 hours)
-    idle_threshold_s: int = 43200  # Must trigger after 12h of no interaction
+    enabled: bool = True
+    cooldown_s: int = 3600           # Min seconds between two proactive messages
+    quiet_hours_start: int = 2       # Quiet hours start (24h, inclusive)
+    quiet_hours_end: int = 7         # Quiet hours end (24h, exclusive)
+    min_interval_s: int = 900        # Shortest heartbeat check interval (15 min)
+    max_interval_s: int = 7200       # Longest heartbeat check interval (2 hours)
+    idle_threshold_s: int = 43200    # Must trigger after 12h of no interaction
 
 
 class SoulEvolutionConfig(Base):

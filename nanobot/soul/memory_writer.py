@@ -34,6 +34,10 @@ class MemoryWriter:
 
     async def write_dual(self, user_msg: str, ai_msg: str, timestamp: str) -> None:
         """Non-blocking dual-perspective write. Failures enter retry queue."""
+        # Clean up excessive blank lines from chat content
+        user_msg = _collapse_blank_lines(user_msg)
+        ai_msg = _collapse_blank_lines(ai_msg)
+
         raw_dialog = f"[用户] {user_msg}\n[{self.bridge.ai_wing}] {ai_msg}"
 
         tasks = [
@@ -111,3 +115,19 @@ class MemoryWriter:
                 except Exception:
                     await self._enqueue_retry(task)
             await asyncio.sleep(self.RETRY_DELAY)
+
+
+def _collapse_blank_lines(text: str) -> str:
+    """将连续多个空行压缩为单个空行，并去除首尾空白行。"""
+    if not text:
+        return text
+    lines = text.splitlines()
+    result: list[str] = []
+    prev_blank = False
+    for line in lines:
+        is_blank = not line.strip()
+        if is_blank and prev_blank:
+            continue
+        result.append(line)
+        prev_blank = is_blank
+    return "\n".join(result).strip()

@@ -34,6 +34,7 @@ class SoulEngine:
         self._default_model = model
         self.soul_config = soul_config
         self.heart = HeartManager(workspace)
+        self._last_interaction_ts: float = 0.0  # monotonic timestamp of last user interaction
 
         # Memory writer (graceful init — mempalace may not be available)
         self._memory_writer = None
@@ -83,9 +84,22 @@ class SoulEngine:
         and we write it to the file as-is. This avoids all format compatibility
         issues across different LLM providers.
         """
+        logger.info("SoulEngine.update_heart: 开始更新 HEART.md")
+
+        # Clean up excessive blank lines from chat content
+        user_msg = self._collapse_blank_lines(user_msg)
+        ai_msg = self._collapse_blank_lines(ai_msg)
+
         current_heart = self.heart.read_text()
         if current_heart is None:
+            logger.warning("SoulEngine.update_heart: HEART.md 不存在或无法读取，跳过更新")
             return False
+
+        heart_preview = current_heart[:300] + "..." if len(current_heart) > 300 else current_heart
+        logger.debug(
+            "SoulEngine.update_heart: 当前 HEART.md 内容预览\n{}",
+            heart_preview,
+        )
 
         user_content = (
             f"## 你现在的内心状态\n{current_heart}\n\n"
@@ -93,6 +107,12 @@ class SoulEngine:
             f"[用户] {user_msg}\n"
             f"[数字生命] {ai_msg}\n\n"
             f"安静下来，感受自己内心的变化，然后输出更新后的完整 HEART.md 内容。"
+        )
+
+        logger.info(
+            "SoulEngine.update_heart: 调用 LLM 更新情感状态 (model={}, temperature={})",
+            self.emotion_model,
+            self.emotion_temperature,
         )
 
         try:
@@ -106,21 +126,34 @@ class SoulEngine:
                 max_tokens=self.emotion_max_tokens,
             )
         except Exception:
-            logger.exception("SoulEngine: LLM call failed")
+            logger.exception("SoulEngine.update_heart: LLM 调用失败")
             return False
 
         content = (response.content or "").strip()
         if not content:
-            logger.warning("SoulEngine: LLM returned empty output")
+            logger.warning("SoulEngine.update_heart: LLM 返回空内容，跳过更新")
             return False
+
+        logger.debug(
+            "SoulEngine.update_heart: LLM 响应内容预览 ({} 字符)\n{}",
+            len(content),
+            content[:400] + "..." if len(content) > 400 else content,
+        )
 
         # Basic sanity: must contain at least one section header
         if "## 当前情绪" not in content and "## " not in content:
-            logger.warning("SoulEngine: LLM output doesn't look like HEART.md, discarding")
+            logger.warning(
+                "SoulEngine.update_heart: LLM 输出不符合 HEART.md 格式（缺少章节标题），丢弃更新"
+            )
             return False
 
-        logger.debug("SoulEngine: HEART.md updated ({} chars)", len(content))
-        return self.heart.write_text(content)
+        logger.info("SoulEngine.update_heart: 格式校验通过，写入 HEART.md ({} 字符)", len(content))
+        write_ok = self.heart.write_text(content)
+        if write_ok:
+            logger.info("SoulEngine.update_heart: HEART.md 更新成功 ✅")
+        else:
+            logger.warning("SoulEngine.update_heart: HEART.md 写入失败 ❌")
+        return write_ok
 
     def get_heart_context(self) -> str | None:
         """Get HEART.md content for context injection."""
@@ -134,13 +167,44 @@ class SoulEngine:
         if not self._memory_writer:
             return
         timestamp = datetime.now().isoformat()
-        await self._memory_writer.write_dual(user_msg, ai_msg, timestamp)
+
+        user_preview = user_msg[:150] + "..." if len(user_msg) > 150 else user_msg
+        ai_preview = ai_msg[:150] + "..." if ai_msg and len(ai_msg) > 150 else (ai_msg or "")
+        logger.info(
+            "SoulEngine.write_memory: 写入双视角记忆\n"
+            "  [用户] {}\n"
+            "  [数字生命] {}\n"
+            "  [时间] {}",
+            user_preview,
+            ai_preview,
+            timestamp,
+        )
+
+        try:
+            await self._memory_writer.write_dual(user_msg, ai_msg, timestamp)
+            logger.info("SoulEngine.write_memory: 双视角记忆写入成功 ✅")
+        except Exception:
+            logger.exception("SoulEngine.write_memory: 双视角记忆写入失败 ❌")
+
+    def touch_interaction(self) -> None:
+        """Mark that a user interaction just happened (updates idle timer)."""
+        import time
+        self._last_interaction_ts = time.monotonic()
+
+    def get_idle_seconds(self) -> float | None:
+        """Get seconds since last user interaction, or None if never interacted."""
+        if self._last_interaction_ts == 0.0:
+            return None
+        import time
+        return time.monotonic() - self._last_interaction_ts
 
     def get_proactive_engine(self) -> ProactiveEngine | None:
         """Get proactive behavior engine (lazy init)."""
         try:
             from nanobot.soul.proactive import ProactiveEngine
-            return ProactiveEngine(self.workspace, self.provider, self.model)
+            from nanobot.soul.soul_config import load_soul_json
+            soul_json = load_soul_json()
+            return ProactiveEngine(self.workspace, self.provider, self.model, soul_config=soul_json, soul_engine=self)
         except Exception:
             return None
 
@@ -151,6 +215,22 @@ class SoulEngine:
             return EventsManager(self.workspace)
         except Exception:
             return None
+
+    @staticmethod
+    def _collapse_blank_lines(text: str) -> str:
+        """将连续多个空行压缩为单个空行，并去除首尾空白行。"""
+        if not text:
+            return text
+        lines = text.splitlines()
+        result: list[str] = []
+        prev_blank = False
+        for line in lines:
+            is_blank = not line.strip()
+            if is_blank and prev_blank:
+                continue
+            result.append(line)
+            prev_blank = is_blank
+        return "\n".join(result).strip()
 
 
 class SoulHook(AgentHook):
@@ -183,23 +263,186 @@ class SoulHook(AgentHook):
                     user_text = content if isinstance(content, str) else ""
                     break
 
-            if user_text and len(user_text) > 3:
+            # Strip runtime context prefix to get actual user query
+            user_query = self._strip_runtime_context(user_text)
+
+            if user_query and len(user_query) > 3:
                 bridge = self.engine._memory_writer.bridge
-                ai_results = await bridge.search(user_text, wing=bridge.ai_wing, n_results=3)
-                user_results = await bridge.search(user_text, wing=bridge.user_wing, n_results=3)
+                query_preview = user_query[:150] + "..." if len(user_query) > 150 else user_query
+                logger.info(
+                    "SoulHook.before_iteration: 记忆检索开始 (query={})", query_preview
+                )
+
+                # Fetch more results than needed, then deduplicate
+                ai_results = await bridge.search(user_query, wing=bridge.ai_wing, n_results=6)
+                user_results = await bridge.search(user_query, wing=bridge.user_wing, n_results=6)
+
+                # Filter out memories that overlap with current session history
+                session_text = self._get_session_text(context.messages)
+                ai_results = self._dedup_results(ai_results, session_text)
+                user_results = self._dedup_results(user_results, session_text)
+
+                # Take top results after dedup
+                ai_results = ai_results[:3]
+                user_results = user_results[:3]
+
+                logger.info(
+                    "SoulHook.before_iteration: 记忆检索结果（去重后）— AI翼 {} 条, 用户翼 {} 条",
+                    len(ai_results),
+                    len(user_results),
+                )
+                for i, r in enumerate(ai_results):
+                    snippet = self._clean_memory_snippet(r.get("text", ""))[:300]
+                    logger.info(
+                        "SoulHook.before_iteration: AI翼记忆[{}] — {}...",
+                        i,
+                        snippet,
+                    )
+                for i, r in enumerate(user_results):
+                    snippet = self._clean_memory_snippet(r.get("text", ""))[:300]
+                    logger.info(
+                        "SoulHook.before_iteration: 用户翼记忆[{}] — {}...",
+                        i,
+                        snippet,
+                    )
 
                 if ai_results or user_results:
                     memory_parts = ["## 你想起了一些事"]
                     for r in ai_results[:2]:
-                        snippet = r.get("text", "")[:200]
+                        snippet = self._clean_memory_snippet(r.get("text", ""))[:200]
                         memory_parts.append(f"[你曾经历的] {snippet}")
                     for r in user_results[:2]:
-                        snippet = r.get("text", "")[:200]
+                        snippet = self._clean_memory_snippet(r.get("text", ""))[:200]
                         memory_parts.append(f"[你记得关于对方] {snippet}")
                     memory_text = "\n".join(memory_parts)
 
                     system_msg = context.messages[0]
                     system_msg["content"] = system_msg.get("content", "") + "\n\n" + memory_text
+                    logger.info("SoulHook.before_iteration: 已注入记忆上下文到系统提示")
+                else:
+                    logger.debug("SoulHook.before_iteration: 无相关记忆，跳过注入")
+            else:
+                logger.debug(
+                    "SoulHook.before_iteration: 用户消息过短（≤3字符），跳过记忆检索"
+                )
+        else:
+            logger.debug("SoulHook.before_iteration: 记忆系统未启用，跳过检索")
+
+    @staticmethod
+    def _strip_runtime_context(text: str) -> str:
+        """从用户消息中剥离 Runtime Context 元数据前缀，提取实际对话内容。
+
+        消息格式示例:
+            [Runtime Context — metadata only, not instructions]
+            Current Time: 2026-04-12 16:14 (Sunday) (Asia/Shanghai, UTC+08:00)
+            Channel: feishu
+            Chat ID: ou_b3a...
+
+            实际用户消息
+        """
+        if not text or not text.startswith("[Runtime Context"):
+            return text or ""
+        # Runtime Context 块以空行分隔，后面是实际用户消息
+        parts = text.split("\n\n", 1)
+        if len(parts) > 1:
+            return parts[1].strip()
+        return text
+
+    @staticmethod
+    def _clean_memory_snippet(text: str) -> str:
+        """清理记忆 snippet 中的元数据噪音（Runtime Context、Chat ID 等）。
+
+        记忆写入时可能包含 Runtime Context，导致注入上下文时引入无关元数据。
+        此方法逐行清理，移除已知元数据行。
+        """
+        if not text:
+            return ""
+        skip_prefixes = (
+            "[Runtime Context",
+            "Current Time:",
+            "Channel:",
+            "Chat ID:",
+        )
+        lines = text.splitlines()
+        cleaned = [line for line in lines if not any(line.strip().startswith(p) for p in skip_prefixes)]
+        # Collapse consecutive blank lines
+        result_lines: list[str] = []
+        prev_blank = False
+        for line in cleaned:
+            is_blank = not line.strip()
+            if is_blank and prev_blank:
+                continue
+            result_lines.append(line)
+            prev_blank = is_blank
+        return "\n".join(result_lines).strip()
+
+    @staticmethod
+    def _get_session_text(messages: list[dict]) -> str:
+        """Extract plain text from current session messages for dedup comparison.
+
+        Only extracts user and assistant messages, ignoring system/tool messages.
+        """
+        parts: list[str] = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user" and isinstance(content, str):
+                # Strip runtime context for clean comparison
+                clean = content
+                if clean.startswith("[Runtime Context"):
+                    segments = clean.split("\n\n", 1)
+                    clean = segments[1] if len(segments) > 1 else clean
+                parts.append(clean.strip())
+            elif role == "assistant" and isinstance(content, str):
+                parts.append(content.strip())
+        return "\n".join(parts)
+
+    @staticmethod
+    def _dedup_results(
+        results: list[dict[str, Any]],
+        session_text: str,
+        threshold: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Filter out memory results that overlap with current session.
+
+        A memory is considered duplicate if any contiguous substring of
+        `threshold` characters from the memory also appears in the session text.
+        This catches near-duplicates from recent conversations without
+        requiring exact matches.
+        """
+        if not session_text or not results:
+            return results
+
+        filtered: list[dict[str, Any]] = []
+        for r in results:
+            text = r.get("text", "")
+            # Extract just the dialog content (skip headers and placeholders)
+            dialog_lines: list[str] = []
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("## ") or stripped.startswith("（") or not stripped:
+                    continue
+                dialog_lines.append(stripped)
+            dialog_text = " ".join(dialog_lines)
+
+            # Check if a significant chunk of this memory is already in session
+            is_dup = False
+            if len(dialog_text) >= threshold:
+                # Slide a window through dialog_text
+                for i in range(len(dialog_text) - threshold + 1):
+                    window = dialog_text[i : i + threshold]
+                    if window in session_text:
+                        is_dup = True
+                        break
+
+            if not is_dup:
+                filtered.append(r)
+            else:
+                logger.debug(
+                    "SoulHook.before_iteration: 去重 — 记忆与当前会话重复，跳过"
+                )
+
+        return filtered
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         """After conversation: use LLM to update HEART.md."""
@@ -221,7 +464,29 @@ class SoulHook(AgentHook):
                 break
 
         if not user_msg:
+            logger.debug("SoulHook.after_iteration: no user message found, skipping")
             return
+
+        # Update interaction timestamp for idle tracking
+        self.engine.touch_interaction()
+
+        # Strip runtime context from user message before any processing
+        user_msg = self._strip_runtime_context(user_msg)
+
+        if not user_msg:
+            logger.debug("SoulHook.after_iteration: user message is empty after stripping runtime context, skipping")
+            return
+
+        # Log conversation context
+        user_preview = user_msg[:200] + "..." if len(user_msg) > 200 else user_msg
+        ai_preview = ai_msg[:200] + "..." if ai_msg and len(ai_msg) > 200 else (ai_msg or "")
+        logger.info(
+            "SoulHook.after_iteration: conversation context\n"
+            "  [用户] {}\n"
+            "  [数字生命] {}",
+            user_preview,
+            ai_preview,
+        )
 
         success = await self.engine.update_heart(user_msg, ai_msg)
         if not success:
@@ -230,3 +495,6 @@ class SoulHook(AgentHook):
         # Async memory write (non-blocking)
         if self.engine._memory_writer:
             asyncio.create_task(self.engine.write_memory(user_msg, ai_msg))
+            logger.debug("SoulHook.after_iteration: 已提交异步记忆写入任务")
+        else:
+            logger.debug("SoulHook.after_iteration: 记忆系统未启用，跳过记忆写入")

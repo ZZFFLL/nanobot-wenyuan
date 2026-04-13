@@ -812,8 +812,10 @@ def gateway(
     if agent._soul_engine:
         from nanobot.soul.proactive import ProactiveEngine
         from nanobot.soul.events import EventsManager
+        from nanobot.soul.soul_config import load_soul_json
 
-        proactive = ProactiveEngine(config.workspace_path, provider, agent.model)
+        soul_json = load_soul_json()
+        proactive = ProactiveEngine(config.workspace_path, provider, agent.model, soul_config=soul_json, soul_engine=agent._soul_engine)
         events_mgr = EventsManager(config.workspace_path)
         original_tick = heartbeat._tick
 
@@ -835,17 +837,28 @@ def gateway(
                         channel=channel, chat_id=chat_id, content=event_text,
                     ))
 
-            # 3. Proactive behavior — may generate a message
-            if proactive.should_reach_out():
-                msg = await proactive.generate_message()
-                if msg:
-                    channel, chat_id = _pick_heartbeat_target()
-                    if channel != "cli":
-                        from nanobot.bus.events import OutboundMessage
-                        await bus.publish_outbound(OutboundMessage(
-                            channel=channel, chat_id=chat_id, content=msg,
-                        ))
-                    return  # Proactive message sent, skip normal heartbeat
+            # 3. Proactive behavior — rule gate + LLM decision in one call
+            decision = await proactive.decide_and_generate()
+            if decision and decision.want_to_reach_out and decision.message:
+                channel, chat_id = _pick_heartbeat_target()
+                if channel != "cli":
+                    from nanobot.bus.events import OutboundMessage
+                    await bus.publish_outbound(OutboundMessage(
+                        channel=channel, chat_id=chat_id, content=decision.message,
+                    ))
+
+                # Record proactive message: update HEART.md + write memory
+                try:
+                    await agent._soul_engine.update_heart("(主动联系用户)", decision.message)
+                    if agent._soul_engine._memory_writer:
+                        import asyncio as _asyncio
+                        _asyncio.create_task(
+                            agent._soul_engine.write_memory("(主动联系用户)", decision.message)
+                        )
+                except Exception:
+                    logger.debug("Soul: failed to record proactive message")
+
+                return  # Proactive message sent, skip normal heartbeat
 
             # 4. Fall back to normal heartbeat
             await original_tick()
@@ -1513,9 +1526,30 @@ def soul_init(
     console.print("[green]✓[/green] IDENTITY.md created")
 
     # Create SOUL.md
-    soul = f"# {name}的灵魂\n\n## 性格\n\n{personality}\n\n## 对用户的初印象\n\n{relationship}\n"
+    soul = f"# 性格\n\n{personality}\n"
     (ws / "SOUL.md").write_text(soul, encoding="utf-8")
     console.print("[green]✓[/green] SOUL.md created")
+
+    # Assess initial cognitive function profile
+    try:
+        import asyncio as _asyncio
+
+        if config:
+            from nanobot.config.loader import set_config_path
+            set_config_path(Path(config).expanduser().resolve())
+        from nanobot.config.loader import load_config
+        cfg = load_config()
+        provider = _make_provider(cfg)
+        if provider:
+            from nanobot.soul.evolution import EvolutionEngine
+            evo = EvolutionEngine(ws, provider, cfg.agents.defaults.model)
+            profile = _asyncio.run(evo.assess_initial_profile(personality))
+            # Append profile to SOUL.md
+            soul_with_profile = soul.rstrip() + f"\n\n# 认知功能图谱\n\n> 此章节由系统自动管理，不建议手动编辑\n\n{profile.to_markdown()}\n"
+            (ws / "SOUL.md").write_text(soul_with_profile, encoding="utf-8")
+            console.print("[green]✓[/green] Cognitive function profile assessed")
+    except Exception:
+        console.print("[dim]  (Cognitive profile assessment skipped — will use defaults)[/dim]")
 
     # Create HEART.md
     heart = HeartManager(ws)

@@ -120,9 +120,11 @@ class SoulDreamEnhancer:
                 evo_result = await evo.check_evolution()
                 if evo_result:
                     evo.apply_evolution(evo_result)
+                    changes = evo_result.get("changes", {})
+                    funcs_changed = ", ".join(changes.keys()) if changes else ""
                     logger.info(
-                        "SoulDreamEnhancer: evolution applied — {}",
-                        evo_result.get("personality_update", ""),
+                        "SoulDreamEnhancer: evolution applied — functions: {}",
+                        funcs_changed,
                     )
             except Exception:
                 logger.debug("SoulDreamEnhancer: evolution check skipped")
