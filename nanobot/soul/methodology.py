@@ -14,6 +14,15 @@ RELATIONSHIP_STAGES = (
     "爱意",
 )
 
+RELATIONSHIP_DIMENSIONS = (
+    "trust",
+    "intimacy",
+    "attachment",
+    "security",
+    "boundary",
+    "affection",
+)
+
 DEFAULT_SOUL_PROFILE = {
     "personality": {},
     "relationship": {
