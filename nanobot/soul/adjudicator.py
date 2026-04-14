@@ -8,6 +8,17 @@ from nanobot.soul.methodology import RELATIONSHIP_STAGES
 class SoulAdjudicator:
     """Apply hard constraints to LLM-proposed soul changes."""
 
+    def adjudicate_heart_update(
+        self,
+        current_heart: str,
+        candidate_text: str,
+    ) -> tuple[bool, str]:
+        if not candidate_text.strip():
+            return False, current_heart
+        if "## " not in candidate_text:
+            return False, current_heart
+        return True, candidate_text
+
     def check_stage_transition(
         self,
         current_stage: str,

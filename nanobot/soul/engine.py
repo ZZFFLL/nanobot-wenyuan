@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext
+from nanobot.soul.adjudicator import SoulAdjudicator
 from nanobot.soul.heart import HeartManager
 from nanobot.soul.prompts import SYSTEM_PROMPT_HEART_UPDATE
 
@@ -34,6 +35,7 @@ class SoulEngine:
         self._default_model = model
         self.soul_config = soul_config
         self.heart = HeartManager(workspace)
+        self._adjudicator = SoulAdjudicator()
         self._last_interaction_ts: float = 0.0  # monotonic timestamp of last user interaction
 
         # Memory writer (graceful init — mempalace may not be available)
@@ -147,8 +149,16 @@ class SoulEngine:
             )
             return False
 
-        logger.info("SoulEngine.update_heart: 格式校验通过，写入 HEART.md ({} 字符)", len(content))
-        write_ok = self.heart.write_text(content)
+        allowed, adjudicated_text = self._adjudicator.adjudicate_heart_update(
+            current_heart=current_heart,
+            candidate_text=content,
+        )
+        if not allowed:
+            logger.warning("SoulEngine.update_heart: 裁决层拒绝更新，保留当前 HEART.md")
+            return False
+
+        logger.info("SoulEngine.update_heart: 格式校验通过，写入 HEART.md ({} 字符)", len(adjudicated_text))
+        write_ok = self.heart.write_text(adjudicated_text)
         if write_ok:
             logger.info("SoulEngine.update_heart: HEART.md 更新成功 ✅")
         else:

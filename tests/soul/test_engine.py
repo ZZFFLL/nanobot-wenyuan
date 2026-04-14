@@ -108,6 +108,26 @@ class TestSoulEngine:
         text = engine.heart.read_text()
         assert "感动" in text
 
+    async def test_update_heart_calls_adjudicator(self, engine, mock_provider):
+        engine.initialize("小文", "测试")
+        markdown_output = (
+            "## 当前情绪\n开心\n\n"
+            "## 情绪强度\n中\n\n"
+            "## 关系状态\n好奇\n\n"
+            "## 性格表现\n温柔\n\n"
+            "## 情感脉络\n（暂无）\n\n"
+            "## 情绪趋势\n平稳\n\n"
+            "## 当前渴望\n想聊天\n"
+        )
+        mock_provider.chat_with_retry.return_value = MagicMock(content=markdown_output)
+        engine._adjudicator = MagicMock()
+        engine._adjudicator.adjudicate_heart_update.return_value = (True, markdown_output)
+
+        result = await engine.update_heart("你好", "你好呀")
+
+        assert result is True
+        engine._adjudicator.adjudicate_heart_update.assert_called_once()
+
     async def test_update_heart_llm_failure_keeps_old(self, engine, mock_provider):
         engine.initialize("小文", "测试")
         old_text = engine.heart.read_text()
