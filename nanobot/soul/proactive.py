@@ -50,6 +50,17 @@ class ProactiveDecision:
     message: str        # The actual message content
     reason: str         # Why the AI made this decision (for logging)
 
+    def to_markdown(self) -> str:
+        """Render a stable markdown trace block for logging."""
+        want = "是" if self.want_to_reach_out else "否"
+        return (
+            "# 主动陪伴记录\n\n"
+            f"- 是否主动联系: {want}\n"
+            f"- 语气: {self.tone or '(无)'}\n"
+            f"- 消息: {self.message or '(无)'}\n"
+            f"- 原因: {self.reason or '(无)'}\n"
+        )
+
 
 # ── LLM prompt ──────────────────────────────────────────────────────
 

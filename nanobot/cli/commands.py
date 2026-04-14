@@ -840,6 +840,18 @@ def gateway(
             # 3. Proactive behavior — rule gate + LLM decision in one call
             decision = await proactive.decide_and_generate()
             if decision and decision.want_to_reach_out and decision.message:
+                try:
+                    from datetime import datetime as _dt
+
+                    from nanobot.soul.logs import SoulLogWriter
+
+                    SoulLogWriter(config.workspace_path).write_proactive(
+                        _dt.now().strftime("%Y-%m-%d-%H%M%S"),
+                        decision,
+                    )
+                except Exception:
+                    logger.debug("Soul: failed to write proactive log")
+
                 channel, chat_id = _pick_heartbeat_target()
                 if channel != "cli":
                     from nanobot.bus.events import OutboundMessage
