@@ -44,6 +44,13 @@ if TYPE_CHECKING:
 
 UNIFIED_SESSION_KEY = "unified:default"
 
+
+@dataclasses.dataclass
+class _ProcessMessageOutcome:
+    response: OutboundMessage | None
+    post_send_finalizer: Callable[[], Awaitable[None]] | None = None
+
+
 class _LoopHook(AgentHook):
     """Core hook for the main loop."""
 
@@ -448,9 +455,10 @@ class AgentLoop:
                         ))
                         stream_segment += 1
 
-                response = await self._process_message(
+                outcome = await self._process_message_with_post_send(
                     msg, on_stream=on_stream, on_stream_end=on_stream_end,
                 )
+                response = outcome.response
                 if response is not None:
                     await self.bus.publish_outbound(response)
                 elif msg.channel == "cli":
@@ -458,6 +466,8 @@ class AgentLoop:
                         channel=msg.channel, chat_id=msg.chat_id,
                         content="", metadata=msg.metadata or {},
                     ))
+                if outcome.post_send_finalizer is not None:
+                    await outcome.post_send_finalizer()
             except asyncio.CancelledError:
                 logger.info("Task cancelled for session {}", msg.session_key)
                 raise
@@ -499,6 +509,25 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
+        outcome = await self._process_message_with_post_send(
+            msg,
+            session_key=session_key,
+            on_progress=on_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
+        )
+        if outcome.post_send_finalizer is not None:
+            await outcome.post_send_finalizer()
+        return outcome.response
+
+    async def _process_message_with_post_send(
+        self,
+        msg: InboundMessage,
+        session_key: str | None = None,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+    ) -> _ProcessMessageOutcome:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -526,8 +555,13 @@ class AgentLoop:
             self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
             self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
-            return OutboundMessage(channel=channel, chat_id=chat_id,
-                                  content=final_content or "Background task completed.")
+            return _ProcessMessageOutcome(
+                response=OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=final_content or "Background task completed.",
+                )
+            )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -541,7 +575,7 @@ class AgentLoop:
         raw = msg.content.strip()
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
-            return result
+            return _ProcessMessageOutcome(response=result)
 
         await self.consolidator.maybe_consolidate_by_tokens(session)
 
@@ -585,7 +619,7 @@ class AgentLoop:
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            return None
+            return _ProcessMessageOutcome(response=None)
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -593,9 +627,11 @@ class AgentLoop:
         meta = dict(msg.metadata or {})
         if on_stream is not None:
             meta["_streamed"] = True
-        return OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content=final_content,
-            metadata=meta,
+        return _ProcessMessageOutcome(
+            response=OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content=final_content,
+                metadata=meta,
+            )
         )
 
     def _sanitize_persisted_blocks(

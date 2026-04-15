@@ -111,11 +111,14 @@ class TestDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_processes_and_publishes(self):
         from nanobot.bus.events import InboundMessage, OutboundMessage
+        from nanobot.agent.loop import _ProcessMessageOutcome
 
         loop, bus = _make_loop()
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="hello")
-        loop._process_message = AsyncMock(
-            return_value=OutboundMessage(channel="test", chat_id="c1", content="hi")
+        loop._process_message_with_post_send = AsyncMock(
+            return_value=_ProcessMessageOutcome(
+                response=OutboundMessage(channel="test", chat_id="c1", content="hi")
+            )
         )
         await loop._dispatch(msg)
         out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
@@ -124,6 +127,7 @@ class TestDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_streaming_preserves_message_metadata(self):
         from nanobot.bus.events import InboundMessage
+        from nanobot.agent.loop import _ProcessMessageOutcome
 
         loop, bus = _make_loop()
         msg = InboundMessage(
@@ -143,9 +147,9 @@ class TestDispatch:
             assert on_stream_end is not None
             await on_stream("hi")
             await on_stream_end(resuming=False)
-            return None
+            return _ProcessMessageOutcome(response=None)
 
-        loop._process_message = fake_process
+        loop._process_message_with_post_send = fake_process
 
         await loop._dispatch(msg)
         first = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
@@ -161,6 +165,7 @@ class TestDispatch:
     @pytest.mark.asyncio
     async def test_processing_lock_serializes(self):
         from nanobot.bus.events import InboundMessage, OutboundMessage
+        from nanobot.agent.loop import _ProcessMessageOutcome
 
         loop, bus = _make_loop()
         order = []
@@ -169,9 +174,11 @@ class TestDispatch:
             order.append(f"start-{m.content}")
             await asyncio.sleep(0.05)
             order.append(f"end-{m.content}")
-            return OutboundMessage(channel="test", chat_id="c1", content=m.content)
+            return _ProcessMessageOutcome(
+                response=OutboundMessage(channel="test", chat_id="c1", content=m.content)
+            )
 
-        loop._process_message = mock_process
+        loop._process_message_with_post_send = mock_process
         msg1 = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="a")
         msg2 = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="b")
 
