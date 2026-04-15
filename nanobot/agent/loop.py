@@ -621,7 +621,7 @@ class AgentLoop:
             message_id=msg.metadata.get("message_id"),
         )
 
-        post_send_finalizer = self._build_post_send_finalizer(msg.content, final_content)
+        post_send_finalizer = self._build_post_send_finalizer(all_msgs, final_content)
 
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
@@ -650,20 +650,21 @@ class AgentLoop:
 
     def _build_post_send_finalizer(
         self,
-        user_msg: str,
+        messages: list[dict[str, Any]],
         final_content: str | None,
     ) -> Callable[[], Awaitable[None]] | None:
         if self._soul_engine is None:
             return None
         if final_content is None or not final_content.strip():
             return None
-
-        normalized_user_msg = self._soul_engine.strip_runtime_context(user_msg)
-        if not normalized_user_msg:
+        if not messages:
             return None
 
         async def _finalize() -> None:
-            await self._soul_engine.finalize_post_send_turn(normalized_user_msg, final_content)
+            await self._soul_engine.finalize_post_send_turn(
+                messages=messages,
+                final_content=final_content,
+            )
 
         return _finalize
 

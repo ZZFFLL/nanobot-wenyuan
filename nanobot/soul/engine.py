@@ -209,10 +209,15 @@ class SoulEngine:
         except Exception:
             logger.exception("SoulEngine.write_memory: 双视角记忆写入失败 ❌")
 
-    async def finalize_post_send_turn(self, user_msg: str, ai_msg: str) -> None:
+    async def finalize_post_send_turn(
+        self,
+        *,
+        messages: list[dict],
+        final_content: str | None,
+    ) -> None:
         """Run post-send Soul finalization for a completed assistant reply."""
-        user_msg = strip_runtime_context(user_msg)
-        ai_msg = ai_msg or ""
+        user_msg = strip_runtime_context(extract_latest_user_text(messages))
+        ai_msg = final_content or ""
 
         if not user_msg:
             logger.debug(
@@ -414,20 +419,7 @@ class SoulHook(AgentHook):
     @staticmethod
     def _latest_user_text(messages: list[dict]) -> str:
         """Return the latest user message text content."""
-
-        for msg in reversed(messages):
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                return content
-            if isinstance(content, list):
-                return " ".join(
-                    block.get("text", "")
-                    for block in content
-                    if isinstance(block, dict) and block.get("type") == "text"
-                )
-        return ""
+        return extract_latest_user_text(messages)
 
     @staticmethod
     def _looks_like_anchor_override(text: str) -> bool:
@@ -572,9 +564,6 @@ class SoulHook(AgentHook):
             logger.debug("SoulHook.after_iteration: no user message found, skipping")
             return
 
-        # Update interaction timestamp for idle tracking
-        self.engine.touch_interaction()
-
         # Strip runtime context from user message before any processing
         user_msg = self._strip_runtime_context(user_msg)
 
@@ -587,7 +576,7 @@ class SoulHook(AgentHook):
             logger.debug("SoulHook.after_iteration: deferring final-response soul processing to post-send finalizer")
             return
 
-        await self.engine.finalize_post_send_turn(user_msg, ai_msg)
+        await self.engine.finalize_post_send_turn(messages=context.messages, final_content=ai_msg)
 
 
 def strip_runtime_context(text: str) -> str:
@@ -598,3 +587,20 @@ def strip_runtime_context(text: str) -> str:
     if len(parts) > 1:
         return parts[1].strip()
     return text
+
+
+def extract_latest_user_text(messages: list[dict]) -> str:
+    """Return the latest user message text content from a built message list."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+    return ""

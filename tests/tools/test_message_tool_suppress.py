@@ -78,7 +78,9 @@ class TestMessageToolSuppressLogic:
         assert outcome.post_send_finalizer is not None
         await outcome.post_send_finalizer()
 
-        loop._soul_engine.finalize_post_send_turn.assert_awaited_once_with("Send", "Done")
+        loop._soul_engine.finalize_post_send_turn.assert_awaited_once()
+        assert loop._soul_engine.finalize_post_send_turn.await_args.kwargs["final_content"] == "Done"
+        assert loop._soul_engine.finalize_post_send_turn.await_args.kwargs["messages"][-1]["content"] == "Done"
         assert len(sent) == 1
 
     @pytest.mark.asyncio

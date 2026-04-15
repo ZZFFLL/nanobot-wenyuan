@@ -96,3 +96,25 @@ async def test_dispatch_does_not_send_second_error_when_post_send_finalizer_fail
     await loop._dispatch(msg)
 
     assert events == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_build_post_send_finalizer_forwards_all_msgs_and_final_content():
+    loop = _make_loop()
+    all_msgs = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": "hi"},
+    ]
+    loop._soul_engine = MagicMock()
+    loop._soul_engine.finalize_post_send_turn = AsyncMock()
+
+    finalizer = loop._build_post_send_finalizer(all_msgs, "final reply")
+
+    assert finalizer is not None
+    await finalizer()
+
+    loop._soul_engine.finalize_post_send_turn.assert_awaited_once_with(
+        messages=all_msgs,
+        final_content="final reply",
+    )

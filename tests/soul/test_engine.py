@@ -332,7 +332,19 @@ class TestSoulEngine:
         )
         mock_provider.chat_with_retry.return_value = MagicMock(content=valid_markdown)
 
-        await engine.finalize_post_send_turn("你好呀", "你好！")
+        messages = [
+            {"role": "system", "content": "系统"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "你好呀"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                ],
+            },
+            {"role": "assistant", "content": "中间过程"},
+        ]
+
+        await engine.finalize_post_send_turn(messages=messages, final_content="你好！")
 
         text = engine.heart.read_text()
         assert text is not None
