@@ -48,6 +48,40 @@ class TestMessageToolSuppressLogic:
         assert result is None  # suppressed
 
     @pytest.mark.asyncio
+    async def test_same_target_suppression_keeps_post_send_finalizer(self, tmp_path: Path) -> None:
+        (tmp_path / "HEART.md").write_text("# heart", encoding="utf-8")
+        loop = _make_loop(tmp_path)
+        tool_call = ToolCallRequest(
+            id="call1", name="message",
+            arguments={"content": "Hello", "channel": "feishu", "chat_id": "chat123"},
+        )
+        calls = iter([
+            LLMResponse(content="", tool_calls=[tool_call]),
+            LLMResponse(content="Done", tool_calls=[]),
+        ])
+        loop.provider.chat_with_retry = AsyncMock(side_effect=lambda *a, **kw: next(calls))
+        loop.tools.get_definitions = MagicMock(return_value=[])
+
+        sent: list[OutboundMessage] = []
+        mt = loop.tools.get("message")
+        if isinstance(mt, MessageTool):
+            mt.set_send_callback(AsyncMock(side_effect=lambda m: sent.append(m)))
+
+        assert loop._soul_engine is not None
+        loop._soul_engine._memory_writer = None
+        loop._soul_engine.finalize_post_send_turn = AsyncMock()
+
+        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Send")
+        outcome = await loop._process_message_with_post_send(msg)
+
+        assert outcome.response is None
+        assert outcome.post_send_finalizer is not None
+        await outcome.post_send_finalizer()
+
+        loop._soul_engine.finalize_post_send_turn.assert_awaited_once_with("Send", "Done")
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
     async def test_not_suppress_when_sent_to_different_target(self, tmp_path: Path) -> None:
         loop = _make_loop(tmp_path)
         tool_call = ToolCallRequest(

@@ -194,7 +194,7 @@ class AgentLoop:
             if (workspace / "HEART.md").exists():
                 from nanobot.soul.engine import SoulEngine, SoulHook
                 self._soul_engine = SoulEngine(workspace, provider, self.model, soul_config=soul_config)
-                self._extra_hooks.append(SoulHook(self._soul_engine))
+                self._extra_hooks.append(SoulHook(self._soul_engine, defer_final_response=True))
                 logger.info("SoulEngine: soul system activated")
         except Exception:
             logger.debug("SoulEngine: soul system not enabled")
@@ -621,6 +621,8 @@ class AgentLoop:
             message_id=msg.metadata.get("message_id"),
         )
 
+        post_send_finalizer = self._build_post_send_finalizer(msg.content, final_content)
+
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -630,7 +632,7 @@ class AgentLoop:
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            return _ProcessMessageOutcome(response=None)
+            return _ProcessMessageOutcome(response=None, post_send_finalizer=post_send_finalizer)
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -642,8 +644,28 @@ class AgentLoop:
             response=OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content=final_content,
                 metadata=meta,
-            )
+            ),
+            post_send_finalizer=post_send_finalizer,
         )
+
+    def _build_post_send_finalizer(
+        self,
+        user_msg: str,
+        final_content: str | None,
+    ) -> Callable[[], Awaitable[None]] | None:
+        if self._soul_engine is None:
+            return None
+        if final_content is None or not final_content.strip():
+            return None
+
+        normalized_user_msg = self._soul_engine.strip_runtime_context(user_msg)
+        if not normalized_user_msg:
+            return None
+
+        async def _finalize() -> None:
+            await self._soul_engine.finalize_post_send_turn(normalized_user_msg, final_content)
+
+        return _finalize
 
     def _sanitize_persisted_blocks(
         self,

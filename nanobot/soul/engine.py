@@ -209,6 +209,39 @@ class SoulEngine:
         except Exception:
             logger.exception("SoulEngine.write_memory: 双视角记忆写入失败 ❌")
 
+    async def finalize_post_send_turn(self, user_msg: str, ai_msg: str) -> None:
+        """Run post-send Soul finalization for a completed assistant reply."""
+        user_msg = strip_runtime_context(user_msg)
+        ai_msg = ai_msg or ""
+
+        if not user_msg:
+            logger.debug(
+                "SoulEngine.finalize_post_send_turn: user message is empty after stripping runtime context, skipping"
+            )
+            return
+
+        self.touch_interaction()
+
+        user_preview = user_msg[:200] + "..." if len(user_msg) > 200 else user_msg
+        ai_preview = ai_msg[:200] + "..." if len(ai_msg) > 200 else ai_msg
+        logger.info(
+            "SoulEngine.finalize_post_send_turn: conversation context\n"
+            "  [用户] {}\n"
+            "  [数字生命] {}",
+            user_preview,
+            ai_preview,
+        )
+
+        success = await self.update_heart(user_msg, ai_msg)
+        if not success:
+            logger.debug("SoulEngine: HEART.md update failed, preserving current state")
+
+        if self._memory_writer:
+            asyncio.create_task(self.write_memory(user_msg, ai_msg))
+            logger.debug("SoulEngine.finalize_post_send_turn: 已提交异步记忆写入任务")
+        else:
+            logger.debug("SoulEngine.finalize_post_send_turn: 记忆系统未启用，跳过记忆写入")
+
     def touch_interaction(self) -> None:
         """Mark that a user interaction just happened (updates idle timer)."""
         import time
@@ -255,13 +288,19 @@ class SoulEngine:
             prev_blank = is_blank
         return "\n".join(result).strip()
 
+    @staticmethod
+    def strip_runtime_context(text: str) -> str:
+        """Strip runtime-context metadata prefix from a user message."""
+        return strip_runtime_context(text)
+
 
 class SoulHook(AgentHook):
     """AgentHook that integrates soul system into nanobot."""
 
-    def __init__(self, engine: SoulEngine) -> None:
+    def __init__(self, engine: SoulEngine, defer_final_response: bool = False) -> None:
         super().__init__(reraise=False)
         self.engine = engine
+        self._defer_final_response = defer_final_response
 
     async def before_iteration(self, context: AgentHookContext) -> None:
         """Before conversation: inject emotional context + relevant memories."""
@@ -370,13 +409,7 @@ class SoulHook(AgentHook):
 
             实际用户消息
         """
-        if not text or not text.startswith("[Runtime Context"):
-            return text or ""
-        # Runtime Context 块以空行分隔，后面是实际用户消息
-        parts = text.split("\n\n", 1)
-        if len(parts) > 1:
-            return parts[1].strip()
-        return text
+        return strip_runtime_context(text)
 
     @staticmethod
     def _latest_user_text(messages: list[dict]) -> str:
@@ -549,24 +582,19 @@ class SoulHook(AgentHook):
             logger.debug("SoulHook.after_iteration: user message is empty after stripping runtime context, skipping")
             return
 
-        # Log conversation context
-        user_preview = user_msg[:200] + "..." if len(user_msg) > 200 else user_msg
-        ai_preview = ai_msg[:200] + "..." if ai_msg and len(ai_msg) > 200 else (ai_msg or "")
-        logger.info(
-            "SoulHook.after_iteration: conversation context\n"
-            "  [用户] {}\n"
-            "  [数字生命] {}",
-            user_preview,
-            ai_preview,
-        )
+        if self._defer_final_response:
+            self.engine.touch_interaction()
+            logger.debug("SoulHook.after_iteration: deferring final-response soul processing to post-send finalizer")
+            return
 
-        success = await self.engine.update_heart(user_msg, ai_msg)
-        if not success:
-            logger.debug("SoulEngine: HEART.md update failed, preserving current state")
+        await self.engine.finalize_post_send_turn(user_msg, ai_msg)
 
-        # Async memory write (non-blocking)
-        if self.engine._memory_writer:
-            asyncio.create_task(self.engine.write_memory(user_msg, ai_msg))
-            logger.debug("SoulHook.after_iteration: 已提交异步记忆写入任务")
-        else:
-            logger.debug("SoulHook.after_iteration: 记忆系统未启用，跳过记忆写入")
+
+def strip_runtime_context(text: str) -> str:
+    """Strip runtime-context metadata prefix from a user message."""
+    if not text or not text.startswith("[Runtime Context"):
+        return text or ""
+    parts = text.split("\n\n", 1)
+    if len(parts) > 1:
+        return parts[1].strip()
+    return text

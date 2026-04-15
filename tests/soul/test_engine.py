@@ -313,9 +313,57 @@ class TestSoulEngine:
             "你好呀", "你好！", mock_writer.write_dual.call_args[0][2]
         )
 
+    async def test_finalize_post_send_turn_updates_heart_and_triggers_memory_write(
+        self, engine, mock_provider
+    ):
+        engine.initialize("小文", "测试")
+        mock_writer = MagicMock()
+        mock_writer.write_dual = AsyncMock()
+        engine._memory_writer = mock_writer
+
+        valid_markdown = (
+            "## 当前情绪\n安心\n\n"
+            "## 情绪强度\n中\n\n"
+            "## 关系状态\n靠近\n\n"
+            "## 性格表现\n温柔\n\n"
+            "## 情感脉络\n（暂无）\n\n"
+            "## 情绪趋势\n平稳\n\n"
+            "## 当前渴望\n继续聊天\n"
+        )
+        mock_provider.chat_with_retry.return_value = MagicMock(content=valid_markdown)
+
+        await engine.finalize_post_send_turn("你好呀", "你好！")
+
+        text = engine.heart.read_text()
+        assert text is not None
+        assert "安心" in text
+
+        await asyncio.sleep(0.1)
+        mock_writer.write_dual.assert_called_once_with(
+            "你好呀", "你好！", mock_writer.write_dual.call_args[0][2]
+        )
+
 
 class TestSoulHookIsAgentHook:
 
     def test_soul_hook_extends_agent_hook(self):
         from nanobot.agent.hook import AgentHook
         assert issubclass(SoulHook, AgentHook)
+
+    @pytest.mark.asyncio
+    async def test_deferred_after_iteration_skips_direct_heart_update(self, engine):
+        engine.update_heart = AsyncMock(return_value=True)
+        engine.write_memory = AsyncMock()
+
+        context = MagicMock()
+        context.messages = [
+            {"role": "user", "content": "你好呀"},
+            {"role": "assistant", "content": "你好！"},
+        ]
+        context.final_content = "你好！"
+
+        hook = SoulHook(engine, defer_final_response=True)
+        await hook.after_iteration(context)
+
+        engine.update_heart.assert_not_called()
+        engine.write_memory.assert_not_called()
