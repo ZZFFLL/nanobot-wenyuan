@@ -49,6 +49,7 @@ UNIFIED_SESSION_KEY = "unified:default"
 class _ProcessMessageOutcome:
     response: OutboundMessage | None
     post_send_finalizer: Callable[[], Awaitable[None]] | None = None
+    user_visible_send_occurred: bool = False
 
 
 class _LoopHook(AgentHook):
@@ -459,6 +460,7 @@ class AgentLoop:
                 outcome = await self._process_message_with_post_send(
                     msg, on_stream=on_stream, on_stream_end=on_stream_end,
                 )
+                main_response_published = outcome.user_visible_send_occurred
                 response = outcome.response
                 if response is not None:
                     await self.bus.publish_outbound(response)
@@ -632,7 +634,11 @@ class AgentLoop:
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            return _ProcessMessageOutcome(response=None, post_send_finalizer=post_send_finalizer)
+            return _ProcessMessageOutcome(
+                response=None,
+                post_send_finalizer=post_send_finalizer,
+                user_visible_send_occurred=True,
+            )
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)

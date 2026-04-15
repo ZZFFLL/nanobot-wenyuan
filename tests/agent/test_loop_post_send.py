@@ -118,3 +118,21 @@ async def test_build_post_send_finalizer_forwards_all_msgs_and_final_content():
         messages=all_msgs,
         final_content="final reply",
     )
+
+
+def test_build_post_send_finalizer_returns_none_without_soul_engine():
+    loop = _make_loop()
+    loop._soul_engine = None
+
+    finalizer = loop._build_post_send_finalizer([{"role": "user", "content": "hello"}], "final reply")
+
+    assert finalizer is None
+
+
+def test_build_post_send_finalizer_returns_none_for_blank_final_content():
+    loop = _make_loop()
+    loop._soul_engine = MagicMock()
+
+    finalizer = loop._build_post_send_finalizer([{"role": "user", "content": "hello"}], "   ")
+
+    assert finalizer is None
