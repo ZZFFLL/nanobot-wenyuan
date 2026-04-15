@@ -138,7 +138,7 @@ class ProactiveEngine:
         # 4. Cooldown since last proactive message?
         now = time.monotonic()
         elapsed = now - self._last_proactive_ts
-        if elapsed < self.constraints.cooldown_s:
+        if self._last_proactive_ts > 0.0 and elapsed < self.constraints.cooldown_s:
             remaining = int(self.constraints.cooldown_s - elapsed)
             return False, f"冷却中 (剩余 {remaining}s)"
 

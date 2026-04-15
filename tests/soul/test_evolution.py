@@ -4,7 +4,13 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from nanobot.soul.evolution import EvolutionEngine, EVOLUTION_PROMPT, SENSITIVITY_KEYWORDS, _count_arcs
+from nanobot.soul.evolution import (
+    EVOLUTION_PROMPT,
+    EvolutionEngine,
+    FunctionProfile,
+    SENSITIVITY_KEYWORDS,
+    _count_arcs,
+)
 from nanobot.soul.proactive import _extract_section
 
 
@@ -88,15 +94,18 @@ class TestCheckEvolution:
 
         mock_provider.chat_with_retry.return_value = MagicMock(
             content=json.dumps({
-                "personality_update": "变得更加照顾人",
+                "evolved_function": "Fe",
+                "direction": "up",
                 "reason": "用户反复寻求安慰",
-                "evidence_count": 3,
+                "manifestation": "变得更加照顾人",
             })
         )
 
         result = await engine.check_evolution()
         assert result is not None
-        assert "personality_update" in result
+        assert result["evolved_function"] == "Fe"
+        assert result["manifestation"] == "变得更加照顾人"
+        assert "changes" in result
 
     async def test_evolution_is_conservative(self, engine, mock_provider, workspace):
         """Evolution should be conservative and gradual."""
@@ -118,16 +127,18 @@ class TestCheckEvolution:
 
         mock_provider.chat_with_retry.return_value = MagicMock(
             content=json.dumps({
-                "personality_update": "变得更加敏感，但核心温柔不变",
+                "evolved_function": "Fi",
+                "direction": "up",
                 "reason": "反复吵架的经历",
-                "evidence_count": 3,
+                "manifestation": "变得更加敏感，但核心温柔不变",
             })
         )
 
         result = await engine.check_evolution()
         assert result is not None
         # Conservative: "核心温柔不变" shows gradual change
-        assert "核心温柔不变" in result["personality_update"]
+        assert "核心温柔不变" in result["manifestation"]
+        assert "changes" in result
 
     async def test_sensitive_personality_lower_threshold(self, engine, workspace):
         """Sensitive personality should lower evidence threshold."""
@@ -234,22 +245,27 @@ class TestApplyEvolution:
         soul_file = workspace / "SOUL.md"
         soul_file.write_text("# 性格\n温柔但倔强，嘴硬心软\n", encoding="utf-8")
 
+        profile = FunctionProfile()
         evolution_result = {
-            "personality_update": "变得更加照顾人",
+            "manifestation": "变得更加照顾人",
             "reason": "用户反复寻求安慰",
+            "changes": {"Fe": {"delta": 0.05, "reason": "用户反复寻求安慰"}},
+            "profile": profile,
         }
 
         engine.apply_evolution(evolution_result)
 
         updated_soul = soul_file.read_text(encoding="utf-8")
         assert "照顾人" in updated_soul
-        assert "成长的痕迹" in updated_soul
+        assert "成长痕迹" in updated_soul
 
     def test_apply_evolution_no_soul_file(self, engine, workspace):
         """No SOUL.md should not crash."""
         evolution_result = {
-            "personality_update": "变化",
+            "manifestation": "变化",
             "reason": "测试",
+            "changes": {"Fi": {"delta": 0.02, "reason": "测试"}},
+            "profile": FunctionProfile(),
         }
         # Should not raise
         engine.apply_evolution(evolution_result)
