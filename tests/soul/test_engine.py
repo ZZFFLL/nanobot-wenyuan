@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from nanobot.soul.engine import SoulEngine, SoulHook
+from nanobot.soul.profile import SoulProfileManager
 
 
 @pytest.fixture
@@ -89,6 +90,29 @@ class TestSoulEngine:
 
         system_msg = context.messages[0]
         assert "情绪" in system_msg["content"]
+
+    async def test_before_iteration_injects_anchor_and_profile_context(self, workspace, mock_provider):
+        engine = SoulEngine(workspace, mock_provider, "test-model")
+        engine.initialize("小文", "测试")
+        (workspace / "CORE_ANCHOR.md").write_text(
+            "# 核心锚点\n\n- 不无底线顺从\n",
+            encoding="utf-8",
+        )
+        SoulProfileManager(workspace).write({
+            "personality": {"Fi": 0.8},
+            "relationship": {"stage": "亲近", "trust": 0.6},
+            "companionship": {"empathy_fit": 0.5},
+        })
+
+        context = MagicMock()
+        context.messages = [{"role": "system", "content": "原system prompt"}]
+        hook = SoulHook(engine)
+
+        await hook.before_iteration(context)
+
+        system_msg = context.messages[0]
+        assert "核心锚点" in system_msg["content"]
+        assert "当前关系阶段" in system_msg["content"]
 
     async def test_update_heart_markdown_output(self, engine, mock_provider):
         engine.initialize("小文", "测试")

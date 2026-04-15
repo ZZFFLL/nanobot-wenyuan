@@ -58,6 +58,8 @@ class TestGate:
         allowed, reason = engine.check_gate()
         assert allowed is False
         assert "HEART.md 不存在" in reason
+        trace_dir = engine.workspace / "soul_logs" / "proactive"
+        assert trace_dir.exists()
 
     def test_disabled_config_fails_gate(self, workspace, mock_provider):
         config = SoulJsonConfig()
@@ -134,6 +136,8 @@ class TestDecisionFlow:
         result = await initialized_engine.generate_message()
 
         assert result is None
+        trace_dir = initialized_engine.workspace / "soul_logs" / "proactive"
+        assert trace_dir.exists()
 
     @pytest.mark.asyncio
     async def test_generate_message_returns_message_when_allowed(self, initialized_engine, mock_provider):

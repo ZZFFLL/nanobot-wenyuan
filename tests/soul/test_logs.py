@@ -29,3 +29,18 @@ def test_log_writer_creates_proactive_trace(tmp_path):
     assert "proactive" in str(path)
     assert "今天过得怎么样？" in content
     assert "最近互动频率下降" in content
+
+
+def test_log_writer_creates_proactive_event_trace(tmp_path):
+    writer = SoulLogWriter(tmp_path)
+
+    path = writer.write_proactive_event(
+        "2026-04-15-110000",
+        event_type="gate_blocked",
+        detail="冷却中 (剩余 100s)",
+    )
+    content = path.read_text(encoding="utf-8")
+
+    assert path.exists()
+    assert "gate_blocked" in content
+    assert "冷却中" in content

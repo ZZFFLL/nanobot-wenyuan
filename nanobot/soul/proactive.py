@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from nanobot.soul.heart import HeartManager
+from nanobot.soul.logs import SoulLogWriter
 from nanobot.soul.soul_config import SoulJsonConfig
 
 if TYPE_CHECKING:
@@ -100,6 +101,7 @@ class ProactiveEngine:
         self.provider = provider
         self.model = model
         self.heart = HeartManager(workspace)
+        self._logs = SoulLogWriter(workspace)
         self._config = soul_config or SoulJsonConfig()
         self._soul_engine = soul_engine  # for idle time tracking
         self._last_proactive_ts: float = 0.0  # timestamp of last proactive message
@@ -118,11 +120,15 @@ class ProactiveEngine:
         """
         # 1. Enabled?
         if not self.constraints.enabled:
-            return False, "主动行为已禁用 (soul.json: proactive.enabled=false)"
+            reason = "主动行为已禁用 (soul.json: proactive.enabled=false)"
+            self._log_event("gate_blocked", reason)
+            return False, reason
 
         # 2. HEART.md exists?
         if not self.heart.heart_file.exists():
-            return False, "HEART.md 不存在"
+            reason = "HEART.md 不存在"
+            self._log_event("gate_blocked", reason)
+            return False, reason
 
         # 3. Quiet hours?
         hour = datetime.now().hour
@@ -133,14 +139,18 @@ class ProactiveEngine:
             # Wraps midnight, e.g. 22-7
             in_quiet = hour >= qs or hour < qe
         if in_quiet:
-            return False, f"静默时段 ({qs}:00-{qe}:00)"
+            reason = f"静默时段 ({qs}:00-{qe}:00)"
+            self._log_event("gate_blocked", reason)
+            return False, reason
 
         # 4. Cooldown since last proactive message?
         now = time.monotonic()
         elapsed = now - self._last_proactive_ts
         if self._last_proactive_ts > 0.0 and elapsed < self.constraints.cooldown_s:
             remaining = int(self.constraints.cooldown_s - elapsed)
-            return False, f"冷却中 (剩余 {remaining}s)"
+            reason = f"冷却中 (剩余 {remaining}s)"
+            self._log_event("gate_blocked", reason)
+            return False, reason
 
         return True, ""
 
@@ -234,6 +244,7 @@ class ProactiveEngine:
             decision = self._parse_decision(content)
             if decision is None:
                 logger.warning("ProactiveEngine: 无法解析 LLM 决策")
+                self._log_event("parse_failed", content[:200])
                 return None
 
             logger.info(
@@ -251,11 +262,14 @@ class ProactiveEngine:
             # Update cooldown timestamp if actually reaching out
             if decision.want_to_reach_out and decision.message:
                 self._last_proactive_ts = time.monotonic()
+            else:
+                self._log_event("decision_skip", decision.reason or "模型决定不主动联系")
 
             return decision
 
         except Exception:
             logger.exception("ProactiveEngine: LLM 精判失败")
+            self._log_event("decision_error", "LLM 精判失败")
             return None
 
     # ── Backward-compatible wrappers ──────────────────────────────────
@@ -314,3 +328,13 @@ class ProactiveEngine:
             message=str(data.get("message", "")),
             reason=str(data.get("reason", "")),
         )
+
+    def _log_event(self, event_type: str, detail: str) -> None:
+        try:
+            self._logs.write_proactive_event(
+                datetime.now().strftime("%Y-%m-%d-%H%M%S"),
+                event_type=event_type,
+                detail=detail,
+            )
+        except Exception:
+            logger.debug("ProactiveEngine: failed to write proactive event log")

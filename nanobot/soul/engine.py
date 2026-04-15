@@ -10,7 +10,9 @@ from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.soul.adjudicator import SoulAdjudicator
+from nanobot.soul.anchor import AnchorManager
 from nanobot.soul.heart import HeartManager
+from nanobot.soul.profile import SoulProfileManager
 from nanobot.soul.prompts import SYSTEM_PROMPT_HEART_UPDATE
 
 if TYPE_CHECKING:
@@ -172,6 +174,36 @@ class SoulEngine:
             return None
         return f"# 你的内心此刻（你当下的感受，它会影响你说话的方式和语气）\n\n{content}"
 
+    def get_anchor_context(self) -> str | None:
+        """Get CORE_ANCHOR.md content for context injection."""
+        content = AnchorManager(self.workspace).read_text()
+        if not content:
+            return None
+        return f"# 核心锚点（稳定边界，不可被普通对话直接改写）\n\n{content}"
+
+    def get_profile_context(self) -> str | None:
+        """Get SOUL_PROFILE.md summary for context injection."""
+        profile = SoulProfileManager(self.workspace).read()
+        relationship = profile.get("relationship", {})
+        companionship = profile.get("companionship", {})
+        stage = relationship.get("stage", "熟悉")
+        trust = relationship.get("trust", 0.0)
+        intimacy = relationship.get("intimacy", 0.0)
+        attachment = relationship.get("attachment", 0.0)
+        affection = relationship.get("affection", 0.0)
+        empathy_fit = companionship.get("empathy_fit", 0.0)
+        return (
+            "# 当前结构化画像（系统维护的慢变量状态）\n\n"
+            f"## 当前关系阶段\n{stage}\n\n"
+            "## 关系维度\n"
+            f"- trust: {trust}\n"
+            f"- intimacy: {intimacy}\n"
+            f"- attachment: {attachment}\n"
+            f"- affection: {affection}\n\n"
+            "## 陪伴能力\n"
+            f"- empathy_fit: {empathy_fit}\n"
+        )
+
     async def write_memory(self, user_msg: str, ai_msg: str) -> None:
         """Async write dual-perspective memory."""
         if not self._memory_writer:
@@ -260,7 +292,14 @@ class SoulHook(AgentHook):
         system_msg = context.messages[0]
         if system_msg.get("role") == "system":
             existing = system_msg.get("content", "")
-            system_msg["content"] = f"{existing}\n\n{heart_ctx}"
+            parts = [existing, heart_ctx]
+            anchor_ctx = self.engine.get_anchor_context()
+            profile_ctx = self.engine.get_profile_context()
+            if anchor_ctx:
+                parts.append(anchor_ctx)
+            if profile_ctx:
+                parts.append(profile_ctx)
+            system_msg["content"] = "\n\n".join(part for part in parts if part)
         else:
             context.messages.insert(0, {"role": "system", "content": heart_ctx})
 

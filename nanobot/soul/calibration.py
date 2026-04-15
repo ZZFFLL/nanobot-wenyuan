@@ -29,11 +29,25 @@ class MonthlyCalibrationBuilder:
         stage = profile.get("relationship", {}).get("stage", "熟悉")
         summary = "本月自动校准已生成，后续将接入更完整的偏移与风险审视逻辑。"
         anchor_state = "已读取核心锚点" if anchor_text else "未发现核心锚点文件"
+        weekly_excerpt = self._recent_weekly_excerpt(workspace)
         return self.render({
-            "summary": summary,
+            "summary": summary + (f"\n\n近期周复盘摘要：\n{weekly_excerpt}" if weekly_excerpt else ""),
             "anchor_state": anchor_state,
             "relationship_stage": stage,
         })
+
+    @staticmethod
+    def _recent_weekly_excerpt(workspace: Path, limit: int = 3) -> str:
+        log_dir = workspace / "soul_logs" / "weekly"
+        if not log_dir.exists():
+            return ""
+        files = sorted(log_dir.glob("*.md"), reverse=True)[:limit]
+        parts = []
+        for path in files:
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                parts.append(text[:300])
+        return "\n\n".join(parts)
 
 
 def build_monthly_calibration_job(timezone: str) -> CronJob:
