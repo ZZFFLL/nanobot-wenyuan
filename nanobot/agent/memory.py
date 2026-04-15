@@ -546,12 +546,13 @@ class Dream:
 
     def _build_tools(self) -> ToolRegistry:
         """Build a minimal tool registry for the Dream agent."""
-        from nanobot.agent.tools.filesystem import EditFileTool, ReadFileTool
+        from nanobot.agent.tools.filesystem import ReadFileTool
+        from nanobot.soul.tool_guard import SoulProtectedEditFileTool
 
         tools = ToolRegistry()
         workspace = self.store.workspace
         tools.register(ReadFileTool(workspace=workspace, allowed_dir=workspace))
-        tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace))
+        tools.register(SoulProtectedEditFileTool(workspace=workspace, allowed_dir=workspace))
         return tools
 
     # -- main entry ----------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -69,6 +70,7 @@ class WeeklyReviewBuilder:
                 current_stage=current_stage,
                 heart_text=heart_text,
                 proactive_excerpt=proactive_excerpt,
+                profile=profile,
             )
             if candidate is not None:
                 allowed, _ = self.adjudicator.check_stage_transition(
@@ -99,6 +101,7 @@ class WeeklyReviewBuilder:
         current_stage: str,
         heart_text: str,
         proactive_excerpt: str,
+        profile: dict,
     ) -> RelationshipInference | None:
         response = await self.provider.chat_with_retry(
             model=self.model,
@@ -115,6 +118,7 @@ class WeeklyReviewBuilder:
                     "role": "user",
                     "content": (
                         f"## 当前关系阶段\n{current_stage}\n\n"
+                        f"## 当前结构化画像\n{json.dumps(profile, ensure_ascii=False, indent=2)}\n\n"
                         f"## 当前 HEART\n{heart_text}\n\n"
                         f"## 近期主动陪伴材料\n{proactive_excerpt or '（暂无）'}"
                     ),
@@ -124,8 +128,27 @@ class WeeklyReviewBuilder:
         content = (response.content or "").strip()
         if not content:
             return None
-        data = json.loads(content)
+        data = self._parse_json_payload(content)
         return RelationshipInference(**data)
+
+    @staticmethod
+    def _parse_json_payload(text: str) -> dict:
+        """Parse JSON content with tolerance for fenced blocks or wrapper text."""
+
+        candidate = text.strip()
+        if not candidate.startswith("{"):
+            match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", candidate, re.DOTALL)
+            if match:
+                candidate = match.group(1).strip()
+
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(candidate[start : end + 1])
+            raise
 
     @staticmethod
     def _recent_log_excerpt(workspace: Path, kind: str, limit: int = 3) -> str:

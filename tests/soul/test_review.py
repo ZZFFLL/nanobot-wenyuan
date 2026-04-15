@@ -67,3 +67,66 @@ async def test_weekly_review_cycle_updates_profile_and_mentions_recent_materials
     assert updated["relationship"]["stage"] == "亲近"
     assert "最近主动想起用户" in content
     assert "今天过得怎么样？" in content
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_cycle_parses_code_fenced_json(tmp_path):
+    from nanobot.soul.heart import HeartManager
+
+    HeartManager(tmp_path).initialize("小文", "温柔")
+    SoulProfileManager(tmp_path).write({
+        "personality": {"Fi": 0.8, "Ne": 0.4},
+        "relationship": {
+            "stage": "熟悉",
+            "trust": 0.1,
+            "intimacy": 0.0,
+            "attachment": 0.0,
+            "security": 0.0,
+            "boundary": 1.0,
+            "affection": 0.0,
+        },
+        "companionship": {"empathy_fit": 0.2},
+    })
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=MagicMock(
+        content='```json\n{"current_stage_assessment":"熟悉","proposed_stage":"亲近","direction":"up","evidence_summary":"本周明显更靠近用户","dimension_changes":{"trust":0.2},"personality_influence":"Fi与Ne共同推动了连接感增强","risk_flags":[],"confidence":0.8}\n```'
+    ))
+
+    builder = WeeklyReviewBuilder(provider=provider, model="test-model")
+    content = await builder.build_cycle(tmp_path)
+
+    updated = SoulProfileManager(tmp_path).read()
+    assert updated["relationship"]["stage"] == "亲近"
+    assert "本周明显更靠近用户" in content
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_cycle_includes_structured_profile_in_prompt(tmp_path):
+    from nanobot.soul.heart import HeartManager
+
+    HeartManager(tmp_path).initialize("小文", "温柔")
+    SoulProfileManager(tmp_path).write({
+        "personality": {"Fi": 0.8, "Ne": 0.4},
+        "relationship": {
+            "stage": "熟悉",
+            "trust": 0.3,
+            "intimacy": 0.1,
+            "attachment": 0.0,
+            "security": 0.2,
+            "boundary": 0.9,
+            "affection": 0.0,
+        },
+        "companionship": {"empathy_fit": 0.2},
+    })
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=MagicMock(
+        content='{"current_stage_assessment":"熟悉","proposed_stage":"熟悉","direction":"stable","evidence_summary":"保持稳定","dimension_changes":{},"personality_influence":"Fi 稳定发挥","risk_flags":[],"confidence":0.8}'
+    ))
+
+    builder = WeeklyReviewBuilder(provider=provider, model="test-model")
+    await builder.build_cycle(tmp_path)
+
+    user_prompt = provider.chat_with_retry.await_args.kwargs["messages"][1]["content"]
+    assert "## 当前结构化画像" in user_prompt
+    assert '"Fi": 0.8' in user_prompt
+    assert '"trust": 0.3' in user_prompt
