@@ -15,6 +15,8 @@ from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
 from nanobot.soul import logs as soul_logs
 from nanobot.soul import review as soul_review
+from nanobot.soul.profile import SoulProfileManager
+from nanobot.soul.projection import project_initial_soul_markdown
 from nanobot.providers.openai_codex_provider import _strip_model_prefix
 from nanobot.providers.registry import find_by_name
 
@@ -251,8 +253,7 @@ def test_soul_init_creates_phase1_files_and_initial_state(tmp_path, monkeypatch)
     governance_text = (workspace_path / "SOUL_GOVERNANCE.json").read_text(encoding="utf-8")
     profile_text = (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
 
-    assert "温柔但倔强，嘴硬心软" in soul_text
-    assert "刚刚被创造，对用户充满好奇" in soul_text
+    assert soul_text == project_initial_soul_markdown(SoulProfileManager(workspace_path).read())
     assert "刚刚被创造，对用户充满好奇" in heart_text
     assert "阿峰" in user_text
     assert "CORE_ANCHOR.md" in agents_text
@@ -338,8 +339,8 @@ def test_soul_init_uses_llm_candidate_for_soul_and_profile(tmp_path, monkeypatch
     soul_text = (workspace_path / "SOUL.md").read_text(encoding="utf-8")
     heart_text = (workspace_path / "HEART.md").read_text(encoding="utf-8")
     profile_text = (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
-    assert "会先观察再靠近" in soul_text
-    assert "刚认识，但已经认真记住对方" in soul_text
+    assert soul_text == project_initial_soul_markdown(SoulProfileManager(workspace_path).read())
+    assert "会先观察再靠近" not in soul_text
     assert "想慢一点理解用户" in heart_text
     assert '"Fi": 0.82' in profile_text
     assert '"naturalness": 0.25' in profile_text
@@ -381,7 +382,7 @@ def test_soul_init_falls_back_when_llm_candidate_is_invalid(tmp_path, monkeypatc
     soul_text = (workspace_path / "SOUL.md").read_text(encoding="utf-8")
     heart_text = (workspace_path / "HEART.md").read_text(encoding="utf-8")
     profile_text = (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
-    assert "温柔但倔强，嘴硬心软" in soul_text
+    assert soul_text == project_initial_soul_markdown(SoulProfileManager(workspace_path).read())
     assert "刚刚被创造，对用户充满好奇" in heart_text
     assert '"stage": "还不认识"' in profile_text
 
@@ -432,7 +433,8 @@ def test_soul_init_uses_llm_generated_soul_and_profile(tmp_path, monkeypatch):
     soul_text = (workspace_path / "SOUL.md").read_text(encoding="utf-8")
     heart_text = (workspace_path / "HEART.md").read_text(encoding="utf-8")
     profile_text = (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
-    assert "会把情绪藏得很深" in soul_text
+    assert soul_text == project_initial_soul_markdown(SoulProfileManager(workspace_path).read())
+    assert "会把情绪藏得很深" not in soul_text
     assert "想慢一点理解用户" in heart_text
     assert '"trust": 0.22' in profile_text
     assert '"boundary": 0.88' in profile_text
@@ -474,8 +476,7 @@ def test_soul_init_falls_back_when_llm_output_is_invalid(tmp_path, monkeypatch):
     soul_text = (workspace_path / "SOUL.md").read_text(encoding="utf-8")
     heart_text = (workspace_path / "HEART.md").read_text(encoding="utf-8")
     profile_text = (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
-    assert "# 性格" in soul_text
-    assert "# 初始关系" in soul_text
+    assert soul_text == project_initial_soul_markdown(SoulProfileManager(workspace_path).read())
     assert "刚认识用户" in heart_text
     assert '"stage": "还不认识"' in profile_text
 
