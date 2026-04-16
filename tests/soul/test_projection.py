@@ -140,3 +140,69 @@ async def test_project_soul_from_profile_rejects_structured_output_and_keeps_exi
     assert len(audit_files) == 1
     assert "SOUL.md 投影候选非法" in trace_files[0].read_text(encoding="utf-8")
     assert '"final_status": "failed"' in audit_files[0].read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_project_soul_from_profile_accepts_partial_profile_by_filling_defaults(tmp_path):
+    from nanobot.soul.projection import project_soul_from_profile
+
+    SoulProfileManager(tmp_path).write({
+        "personality": {"Fi": 0.8},
+        "relationship": {
+            "stage": "熟悉",
+            "trust": 0.2,
+            "intimacy": 0.1,
+            "attachment": 0.0,
+            "security": 0.1,
+            "boundary": 0.9,
+            "affection": 0.0,
+        },
+        "companionship": {"empathy_fit": 0.2},
+    })
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(
+        return_value=SimpleNamespace(
+            content=(
+                "# 性格\n\n"
+                "她会先确认自己的感受，再决定靠近的程度。\n\n"
+                "# 初始关系\n\n"
+                "她对用户已有初步熟悉感，也会继续保留自己的分寸。\n"
+            )
+        )
+    )
+
+    content = await project_soul_from_profile(
+        tmp_path,
+        provider=provider,
+        model="test-model",
+    )
+
+    assert "初步熟悉感" in content
+
+
+@pytest.mark.asyncio
+async def test_project_soul_from_profile_still_rejects_invalid_present_values(tmp_path):
+    from nanobot.soul.projection import SoulProjectionError, project_soul_from_profile
+
+    SoulProfileManager(tmp_path).write({
+        "personality": {"Fi": 0.8},
+        "relationship": {
+            "stage": "熟悉",
+            "trust": "bad",
+            "intimacy": 0.1,
+            "attachment": 0.0,
+            "security": 0.1,
+            "boundary": 0.9,
+            "affection": 0.0,
+        },
+        "companionship": {"empathy_fit": 0.2},
+    })
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock()
+
+    with pytest.raises(SoulProjectionError, match=r"relationship\.trust 必须是 0\.0-1\.0 数值"):
+        await project_soul_from_profile(
+            tmp_path,
+            provider=provider,
+            model="test-model",
+        )

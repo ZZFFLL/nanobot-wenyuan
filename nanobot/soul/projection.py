@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
 from nanobot.soul.logs import SoulLogWriter
-from nanobot.soul.methodology import RELATIONSHIP_STAGES, render_soul_method_markdown
+from nanobot.soul.methodology import (
+    RELATIONSHIP_STAGES,
+    build_default_profile,
+    render_soul_method_markdown,
+)
 from nanobot.soul.profile import SoulProfileManager
 
 PROJECTION_PROMPT = (
@@ -77,7 +82,7 @@ class SoulProjectionError(RuntimeError):
 def project_initial_soul_markdown(profile: dict, *, use_expression_seed: bool = True) -> str:
     """Build init-time ``SOUL.md`` from structured profile state."""
 
-    ensure_projectable_profile(profile, error_cls=ValueError)
+    profile = normalize_projectable_profile(profile, error_cls=ValueError)
     personality = _project_personality_text(profile, use_expression_seed=use_expression_seed)
     relationship = _project_relationship_text(profile, use_expression_seed=use_expression_seed)
     return (
@@ -102,7 +107,7 @@ async def project_soul_from_profile(
     soul_file = workspace / "SOUL.md"
     current_soul_text = soul_file.read_text(encoding="utf-8") if soul_file.exists() else ""
     profile = profile_override if profile_override is not None else SoulProfileManager(workspace).read()
-    ensure_projectable_profile(profile, error_cls=SoulProjectionError)
+    profile = normalize_projectable_profile(profile, error_cls=SoulProjectionError)
     profile_text = json.dumps(profile, ensure_ascii=False, indent=2)
     core_anchor_text = _read_optional_text(workspace / "CORE_ANCHOR.md")
     soul_method_text = _read_optional_text(workspace / "SOUL_METHOD.md") or render_soul_method_markdown()
@@ -326,6 +331,33 @@ def ensure_projectable_profile(
     error = projectable_profile_error(profile)
     if error:
         raise error_cls(f"SOUL_PROFILE.md 内容非法，无法重建 SOUL.md: {error}")
+
+
+def normalize_projectable_profile(
+    profile: dict,
+    *,
+    error_cls: type[Exception] = ValueError,
+) -> dict:
+    if not isinstance(profile, dict):
+        ensure_projectable_profile(profile, error_cls=error_cls)
+        return profile
+
+    normalized = deepcopy(profile)
+    defaults = build_default_profile()
+    defaults["personality"] = {key: 0.0 for key in _PERSONALITY_KEYS}
+    for section in ("personality", "relationship", "companionship"):
+        default_section = defaults.get(section)
+        current_section = normalized.get(section)
+        if current_section is None:
+            normalized[section] = deepcopy(default_section)
+            continue
+        if isinstance(default_section, dict) and isinstance(current_section, dict):
+            merged = deepcopy(default_section)
+            merged.update(current_section)
+            normalized[section] = merged
+
+    ensure_projectable_profile(normalized, error_cls=error_cls)
+    return normalized
 
 
 def projectable_profile_error(profile: dict) -> str:
