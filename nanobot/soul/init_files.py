@@ -225,12 +225,7 @@ def write_selected_files(
                 target.write_text(build_core_anchor_markdown(payload), encoding="utf-8")
             elif filename == "SOUL.md":
                 target.write_text(
-                    project_initial_soul_markdown(
-                        _resolve_profile_source(workspace, profile_override),
-                        preferred_markdown=soul_markdown_override,
-                        fallback_personality=payload.personality if payload is not None else "",
-                        fallback_relationship=payload.relationship if payload is not None else "",
-                    ),
+                    project_initial_soul_markdown(_resolve_profile_source(workspace, profile_override)),
                     encoding="utf-8",
                 )
             elif filename == "HEART.md":

@@ -63,22 +63,11 @@ class SoulProjectionError(RuntimeError):
     """Raised when SOUL.md projection fails validation."""
 
 
-def project_initial_soul_markdown(
-    profile: dict,
-    *,
-    preferred_markdown: str | None = None,
-    fallback_personality: str = "",
-    fallback_relationship: str = "",
-) -> str:
+def project_initial_soul_markdown(profile: dict) -> str:
     """Build init-time ``SOUL.md`` from structured profile state."""
 
-    if preferred_markdown:
-        error = validate_soul_markdown(preferred_markdown)
-        if not error:
-            return preferred_markdown.rstrip() + "\n"
-
-    personality = fallback_personality.strip() or _project_personality_text(profile)
-    relationship = fallback_relationship.strip() or _project_relationship_text(profile)
+    personality = _project_personality_text(profile)
+    relationship = _project_relationship_text(profile)
     return (
         "# 性格\n\n"
         f"{personality}\n\n"

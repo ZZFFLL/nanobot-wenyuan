@@ -40,6 +40,21 @@ def _profile(stage: str = "亲近") -> dict:
     }
 
 
+def test_project_initial_soul_markdown_ignores_non_profile_text():
+    from nanobot.soul.projection import project_initial_soul_markdown
+
+    profile = _profile(stage="亲近")
+
+    content = project_initial_soul_markdown(profile)
+
+    assert "候选文本" not in content
+    assert "候选关系" not in content
+    assert "payload 性格" not in content
+    assert "payload 关系" not in content
+    assert "更在意内心真实与情感一致性" in content
+    assert "更稳定的信任" in content
+
+
 @pytest.mark.asyncio
 async def test_project_soul_from_profile_uses_llm_and_writes_markdown(tmp_path):
     from nanobot.soul.projection import project_soul_from_profile

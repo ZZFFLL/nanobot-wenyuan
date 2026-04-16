@@ -70,6 +70,7 @@ def test_bootstrap_workspace_writes_profile_before_projected_soul(tmp_path, monk
         seen.append("project")
         assert (tmp_path / "SOUL_PROFILE.md").exists()
         assert profile["relationship"]["stage"] == "熟悉"
+        assert _kwargs == {}
         return "# 性格\n\n投影后的性格。\n\n# 初始关系\n\n投影后的关系。\n"
 
     monkeypatch.setattr("nanobot.soul.bootstrap.SoulProfileManager.write", _track_profile_write)
@@ -96,6 +97,29 @@ def test_bootstrap_workspace_writes_profile_before_projected_soul(tmp_path, monk
     )
 
 
+def test_bootstrap_workspace_persists_soul_only_from_profile(tmp_path):
+    from nanobot.soul.bootstrap import SoulInitPayload, bootstrap_workspace
+    from nanobot.soul.projection import project_initial_soul_markdown
+
+    profile = _profile(stage="熟悉")
+    bootstrap_workspace(
+        tmp_path,
+        SoulInitPayload(
+            ai_name="温予安",
+            gender="女",
+            birthday="2026-04-01",
+            personality="payload 性格文本",
+            relationship="payload 关系文本",
+            user_name="阿峰",
+            user_birthday="1990-01-01",
+        ),
+        profile_override=profile,
+        soul_markdown_override="# 性格\n\n候选性格。\n\n# 初始关系\n\n候选关系。\n",
+    )
+
+    assert (tmp_path / "SOUL.md").read_text(encoding="utf-8") == project_initial_soul_markdown(profile)
+
+
 def test_soul_init_only_soul_force_fails_without_profile(tmp_path, monkeypatch):
     config_path, workspace = _write_config(tmp_path)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -114,6 +138,32 @@ def test_soul_init_only_soul_force_fails_without_profile(tmp_path, monkeypatch):
     assert result.exit_code == 2
     assert "SOUL_PROFILE.md" in result.stdout
     assert "不存在" in result.stdout
+
+
+def test_write_selected_files_persists_soul_only_from_profile(tmp_path):
+    from nanobot.soul.init_files import write_selected_files
+    from nanobot.soul.bootstrap import SoulInitPayload
+    from nanobot.soul.projection import project_initial_soul_markdown
+
+    profile = _profile(stage="熟悉")
+    write_selected_files(
+        tmp_path,
+        targets=["SOUL_PROFILE.md", "SOUL.md"],
+        payload=SoulInitPayload(
+            ai_name="温予安",
+            gender="女",
+            birthday="2026-04-01",
+            personality="payload 性格文本",
+            relationship="payload 关系文本",
+            user_name="阿峰",
+            user_birthday="1990-01-01",
+        ),
+        force=True,
+        soul_markdown_override="# 性格\n\n候选性格。\n\n# 初始关系\n\n候选关系。\n",
+        profile_override=profile,
+    )
+
+    assert (tmp_path / "SOUL.md").read_text(encoding="utf-8") == project_initial_soul_markdown(profile)
 
 
 def test_soul_init_only_soul_force_rebuilds_from_existing_profile(tmp_path, monkeypatch):

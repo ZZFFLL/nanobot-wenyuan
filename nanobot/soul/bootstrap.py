@@ -98,12 +98,7 @@ def bootstrap_workspace(
 
     profile = deepcopy(profile_override) if profile_override is not None else build_initial_profile(personality_values)
     SoulProfileManager(workspace).write(profile)
-    soul_markdown = project_initial_soul_markdown(
-        profile,
-        preferred_markdown=soul_markdown_override,
-        fallback_personality=payload.personality,
-        fallback_relationship=payload.relationship,
-    )
+    soul_markdown = project_initial_soul_markdown(profile)
     (workspace / "SOUL.md").write_text(
         soul_markdown,
         encoding="utf-8",
