@@ -1622,6 +1622,12 @@ def soul_init(
             raise typer.Exit(2) from exc
 
         pending_targets = [target for target in targets if force or not (ws / target).exists()]
+        if "SOUL.md" in pending_targets and "SOUL_PROFILE.md" not in pending_targets:
+            profile_file = ws / "SOUL_PROFILE.md"
+            if not profile_file.exists():
+                console.print("[red]SOUL.md 初始化依赖 SOUL_PROFILE.md；当前工作区不存在该文件[/red]")
+                raise typer.Exit(2)
+
         provider = None
         effective_cfg = cfg or load_config(resolved_config_path if resolved_config_path.exists() else None)
         use_llm = targets_need_llm(pending_targets)

@@ -12,13 +12,13 @@ from nanobot.soul.bootstrap import (
     build_core_anchor_markdown,
     build_identity_markdown,
     build_initial_profile,
-    build_soul_markdown,
     build_user_markdown,
     load_workspace_template,
 )
 from nanobot.soul.events import EventsManager
 from nanobot.soul.heart import HeartManager, render_initial_heart_markdown
 from nanobot.soul.profile import SoulProfileManager
+from nanobot.soul.projection import project_initial_soul_markdown
 
 ALLOWED_INIT_FILES = (
     "IDENTITY.md",
@@ -33,8 +33,19 @@ ALLOWED_INIT_FILES = (
     "EVENTS.md",
 )
 
-INIT_FILE_ORDER = list(ALLOWED_INIT_FILES)
-_SOUL_LLM_TARGETS = {"SOUL.md", "SOUL_PROFILE.md", "HEART.md"}
+INIT_FILE_ORDER = [
+    "IDENTITY.md",
+    "USER.md",
+    "AGENTS.md",
+    "CORE_ANCHOR.md",
+    "SOUL_METHOD.md",
+    "SOUL_GOVERNANCE.json",
+    "SOUL_PROFILE.md",
+    "SOUL.md",
+    "HEART.md",
+    "EVENTS.md",
+]
+_SOUL_LLM_TARGETS = {"SOUL_PROFILE.md", "HEART.md"}
 
 _PROMPT_LABELS = {
     "ai_name": "数字生命的名字",
@@ -102,8 +113,6 @@ def required_fields_for_targets(targets: list[str], *, use_llm: bool = False) ->
             required.update({"user_name", "user_birthday"})
         elif target == "CORE_ANCHOR.md":
             required.add("ai_name")
-        elif target == "SOUL.md":
-            required.update({"personality", "relationship"})
         elif target == "HEART.md":
             required.update({"ai_name", "personality", "relationship"})
         elif target == "EVENTS.md":
@@ -167,12 +176,6 @@ def read_existing_seed(workspace: Path) -> dict[str, str]:
         if seed["user_birthday"] == "待了解":
             seed["user_birthday"] = ""
 
-    soul = workspace / "SOUL.md"
-    if soul.exists():
-        text = soul.read_text(encoding="utf-8")
-        seed["personality"] = _read_heading_section(text, "性格")
-        seed["relationship"] = _read_heading_section(text, "初始关系")
-
     return seed
 
 
@@ -204,24 +207,35 @@ def write_selected_files(
             target.write_text(load_workspace_template("SOUL_METHOD.md"), encoding="utf-8")
         elif filename == "SOUL_GOVERNANCE.json":
             target.write_text(load_workspace_template("SOUL_GOVERNANCE.json"), encoding="utf-8")
+        elif filename == "SOUL_PROFILE.md":
+            profile = profile_override if profile_override is not None else build_initial_profile()
+            SoulProfileManager(workspace).write(profile)
         else:
-            if payload is None:
-                raise ValueError(f"{filename} 初始化需要有效的 payload")
             if filename == "IDENTITY.md":
+                if payload is None:
+                    raise ValueError(f"{filename} 初始化需要有效的 payload")
                 target.write_text(build_identity_markdown(payload), encoding="utf-8")
             elif filename == "USER.md":
+                if payload is None:
+                    raise ValueError(f"{filename} 初始化需要有效的 payload")
                 target.write_text(build_user_markdown(payload), encoding="utf-8")
             elif filename == "CORE_ANCHOR.md":
+                if payload is None:
+                    raise ValueError(f"{filename} 初始化需要有效的 payload")
                 target.write_text(build_core_anchor_markdown(payload), encoding="utf-8")
             elif filename == "SOUL.md":
                 target.write_text(
-                    soul_markdown_override or build_soul_markdown(payload),
+                    project_initial_soul_markdown(
+                        _resolve_profile_source(workspace, profile_override),
+                        preferred_markdown=soul_markdown_override,
+                        fallback_personality=payload.personality if payload is not None else "",
+                        fallback_relationship=payload.relationship if payload is not None else "",
+                    ),
                     encoding="utf-8",
                 )
-            elif filename == "SOUL_PROFILE.md":
-                profile = profile_override if profile_override is not None else build_initial_profile()
-                SoulProfileManager(workspace).write(profile)
             elif filename == "HEART.md":
+                if payload is None and heart_markdown_override is None:
+                    raise ValueError(f"{filename} 初始化需要有效的 payload")
                 HeartManager(workspace).write_text(
                     heart_markdown_override
                     or render_initial_heart_markdown(
@@ -230,6 +244,8 @@ def write_selected_files(
                     )
                 )
             elif filename == "EVENTS.md":
+                if payload is None:
+                    raise ValueError(f"{filename} 初始化需要有效的 payload")
                 EventsManager(workspace).initialize(
                     ai_name=payload.ai_name,
                     ai_birthday=payload.birthday,
@@ -245,6 +261,15 @@ def write_selected_files(
         ))
 
     return actions
+
+
+def _resolve_profile_source(workspace: Path, profile_override: dict | None) -> dict:
+    if profile_override is not None:
+        return profile_override
+    profile_file = workspace / "SOUL_PROFILE.md"
+    if not profile_file.exists():
+        raise ValueError("SOUL.md 初始化依赖 SOUL_PROFILE.md；请先初始化 SOUL_PROFILE.md")
+    return SoulProfileManager(workspace).read()
 
 
 def _read_keyed_line(text: str, key: str) -> str:

@@ -40,9 +40,51 @@ _FORBIDDEN_STRUCTURED_PATTERNS = (
     r"\b(?:empathy_fit|memory_fit|naturalness|initiative_quality|scene_awareness|boundary_expression)\s*[:=]",
 )
 
+_FUNCTION_TRAIT_TEXT = {
+    "Fi": "更在意内心真实与情感一致性",
+    "Fe": "会敏锐感受关系里的情绪流动",
+    "Ti": "习惯先在心里把事情想清楚",
+    "Te": "表达时带着克制的判断和秩序感",
+    "Si": "会认真记住稳定、具体的细节",
+    "Se": "在靠近现实与当下时更直接",
+    "Ni": "会凭直觉捕捉长期走向",
+    "Ne": "在互动里保留好奇与延展感",
+}
+
+_RELATIONSHIP_STAGE_TEXT = {
+    "还不认识": "她与用户仍停留在最初的观察阶段，会先保持距离，再慢慢确认是否值得继续靠近。",
+    "熟悉": "她已经对用户形成了初步的熟悉感，会自然靠近一些，但不会因此放下自己的边界。",
+    "亲近": "她对用户有了更稳定的信任，会在自然靠近的同时继续守住自己的节奏和边界。",
+    "喜欢": "她会更主动地向用户靠近，但这种靠近依旧建立在稳定信任与清晰边界之上。",
+}
+
 
 class SoulProjectionError(RuntimeError):
     """Raised when SOUL.md projection fails validation."""
+
+
+def project_initial_soul_markdown(
+    profile: dict,
+    *,
+    preferred_markdown: str | None = None,
+    fallback_personality: str = "",
+    fallback_relationship: str = "",
+) -> str:
+    """Build init-time ``SOUL.md`` from structured profile state."""
+
+    if preferred_markdown:
+        error = validate_soul_markdown(preferred_markdown)
+        if not error:
+            return preferred_markdown.rstrip() + "\n"
+
+    personality = fallback_personality.strip() or _project_personality_text(profile)
+    relationship = fallback_relationship.strip() or _project_relationship_text(profile)
+    return (
+        "# 性格\n\n"
+        f"{personality}\n\n"
+        "# 初始关系\n\n"
+        f"{relationship}\n"
+    )
 
 
 async def project_soul_from_profile(
@@ -272,6 +314,62 @@ def _extract_section(text: str, heading: str) -> str:
     pattern = re.compile(rf"(?ms)^# {re.escape(heading)}\s*\n(.*?)(?=^# |\Z)")
     match = pattern.search(text)
     return match.group(1).strip() if match else ""
+
+
+def _project_personality_text(profile: dict) -> str:
+    personality = profile.get("personality") if isinstance(profile, dict) else {}
+    if not isinstance(personality, dict):
+        personality = {}
+
+    dominant_functions = sorted(
+        (
+            (name, float(value))
+            for name, value in personality.items()
+            if isinstance(value, (int, float))
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:2]
+    dominant_traits = [
+        _FUNCTION_TRAIT_TEXT[name]
+        for name, _value in dominant_functions
+        if name in _FUNCTION_TRAIT_TEXT
+    ]
+    if not dominant_traits:
+        return "她的慢状态还在成形，但会稳定地守住自己的边界与节奏。"
+
+    trait_text = "，".join(dominant_traits)
+    return f"她的慢状态气质以{trait_text}为主，在靠近他人之前也会先确认自己的感受与边界。"
+
+
+def _project_relationship_text(profile: dict) -> str:
+    relationship = profile.get("relationship") if isinstance(profile, dict) else {}
+    if not isinstance(relationship, dict):
+        relationship = {}
+
+    stage = str(relationship.get("stage") or "").strip()
+    stage_text = _RELATIONSHIP_STAGE_TEXT.get(
+        stage,
+        "她与用户的关系还在缓慢形成中，会一边观察、一边确认自己愿意靠近到什么程度。",
+    )
+
+    trust = float(relationship.get("trust", 0.0) or 0.0)
+    boundary = float(relationship.get("boundary", 0.0) or 0.0)
+    if trust >= 0.6:
+        trust_text = "这种关系里已经有了比较稳定的信任感"
+    elif trust >= 0.2:
+        trust_text = "她对这段关系的信任正在慢慢累积"
+    else:
+        trust_text = "她对这段关系仍然保持谨慎试探"
+
+    if boundary >= 0.8:
+        boundary_text = "也会明确守住自己的边界"
+    elif boundary >= 0.5:
+        boundary_text = "同时会注意保留自己的分寸"
+    else:
+        boundary_text = "但边界感还需要继续稳定下来"
+
+    return f"{stage_text}{trust_text}，{boundary_text}。"
 
 
 def _read_optional_text(path: Path) -> str:

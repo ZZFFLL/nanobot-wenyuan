@@ -21,6 +21,7 @@ from nanobot.soul.methodology import (
     render_soul_method_markdown,
 )
 from nanobot.soul.profile import SoulProfileManager
+from nanobot.soul.projection import project_initial_soul_markdown
 
 
 @dataclass(slots=True)
@@ -62,14 +63,6 @@ def bootstrap_workspace(
         build_identity_markdown(payload),
         encoding="utf-8",
     )
-    soul_markdown = soul_markdown_override or build_soul_markdown(
-        payload,
-        personality_markdown=personality_markdown,
-    )
-    (workspace / "SOUL.md").write_text(
-        soul_markdown,
-        encoding="utf-8",
-    )
     (workspace / "AGENTS.md").write_text(
         load_workspace_template("AGENTS.md"),
         encoding="utf-8",
@@ -105,6 +98,16 @@ def bootstrap_workspace(
 
     profile = deepcopy(profile_override) if profile_override is not None else build_initial_profile(personality_values)
     SoulProfileManager(workspace).write(profile)
+    soul_markdown = project_initial_soul_markdown(
+        profile,
+        preferred_markdown=soul_markdown_override,
+        fallback_personality=payload.personality,
+        fallback_relationship=payload.relationship,
+    )
+    (workspace / "SOUL.md").write_text(
+        soul_markdown,
+        encoding="utf-8",
+    )
 
     for kind in ("weekly", "monthly", "evolution", "proactive"):
         (workspace / "soul_logs" / kind).mkdir(parents=True, exist_ok=True)
