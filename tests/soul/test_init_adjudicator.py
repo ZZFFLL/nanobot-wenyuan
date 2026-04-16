@@ -157,3 +157,35 @@ def test_adjudicator_falls_back_on_invalid_heart():
 
     assert result.used_fallback is True
     assert "HEART.md 候选非法" in result.reason
+
+
+def test_adjudicator_falls_back_on_invalid_expression_seed_type():
+    candidate = SoulInitCandidate(
+        soul_markdown="# 性格\n\n温柔但克制\n\n# 初始关系\n\n刚刚认识",
+        heart_markdown=(
+            "## 当前情绪\n安静。\n\n"
+            "## 情绪强度\n低到中\n\n"
+            "## 关系状态\n还在慢慢感知用户。\n\n"
+            "## 性格表现\n温柔但克制\n\n"
+            "## 情感脉络\n（暂无）\n\n"
+            "## 情绪趋势\n尚在形成\n\n"
+            "## 当前渴望\n想先理解眼前的人。\n"
+        ),
+        profile={
+            "personality": {"Fi": 0.8, "Fe": 0.3, "Ti": 0.2, "Te": 0.1, "Si": 0.5, "Se": 0.1, "Ni": 0.2, "Ne": 0.5},
+            "relationship": {"stage": "还不认识", "trust": 0.0, "intimacy": 0.0, "attachment": 0.0, "security": 0.0, "boundary": 0.95, "affection": 0.0},
+            "companionship": {"empathy_fit": 0.2, "memory_fit": 0.0, "naturalness": 0.2, "initiative_quality": 0.0, "scene_awareness": 0.1, "boundary_expression": 0.9},
+            "expression": {"personality_seed": ["不是字符串"], "relationship_seed": "刚刚认识"},
+        },
+    )
+    adjudicator = SoulInitAdjudicator()
+
+    result = adjudicator.adjudicate(
+        candidate=candidate,
+        default_soul_markdown="# 性格\n\n默认\n\n# 初始关系\n\n默认",
+        default_heart_markdown=_default_heart(),
+        default_profile=_default_profile(),
+    )
+
+    assert result.used_fallback is True
+    assert "expression.personality_seed" in result.reason

@@ -454,6 +454,59 @@ def test_soul_init_falls_back_when_llm_candidate_is_invalid(tmp_path, monkeypatc
     assert audit_payload["result"]["soul_markdown"] == soul_text
 
 
+def test_soul_init_falls_back_before_persisting_invalid_expression_seed_types(tmp_path, monkeypatch):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(config.model_dump(mode="json", by_alias=True), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=MagicMock(
+        content=(
+            '{"soul_markdown":"# 性格\\n\\n克制、细腻、会先观察再靠近。\\n\\n# 初始关系\\n\\n刚认识，但已经认真记住对方。",'
+            '"heart_markdown":"## 当前情绪\\n刚刚诞生，心里还很安静。\\n\\n## 情绪强度\\n低到中\\n\\n## 关系状态\\n会先观察，再慢慢确认距离。\\n\\n## 性格表现\\n克制、细腻、会先观察再靠近。\\n\\n## 情感脉络\\n（暂无）\\n\\n## 情绪趋势\\n尚在形成\\n\\n## 当前渴望\\n想慢一点理解用户。",'
+            '"profile":{"personality":{"Fi":0.82,"Fe":0.28,"Ti":0.16,"Te":0.10,"Si":0.42,"Se":0.08,"Ni":0.24,"Ne":0.60},'
+            '"relationship":{"stage":"熟悉","trust":0.12,"intimacy":0.04,"attachment":0.0,"security":0.10,"boundary":0.92,"affection":0.0},'
+            '"companionship":{"empathy_fit":0.22,"memory_fit":0.02,"naturalness":0.25,"initiative_quality":0.0,"scene_awareness":0.12,"boundary_expression":0.90},'
+            '"expression":{"personality_seed":["bad-seed"],"relationship_seed":"刚认识，但已经认真记住对方。"}}}'
+        )
+    ))
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _cfg: provider)
+
+    result = runner.invoke(
+        app,
+        ["soul", "init", "--config", str(config_path)],
+        input=(
+            "温予安\n"
+            "女\n"
+            "2026-04-01\n"
+            "温柔但倔强，嘴硬心软\n"
+            "刚刚被创造，对用户充满好奇\n"
+            "阿峰\n"
+            "1990-01-01\n"
+        ),
+    )
+
+    assert result.exit_code == 0
+    soul_text = (workspace_path / "SOUL.md").read_text(encoding="utf-8")
+    profile = SoulProfileManager(workspace_path).read()
+    assert soul_text == project_initial_soul_markdown(profile)
+    assert profile["expression"]["personality_seed"] == "温柔但倔强，嘴硬心软"
+    assert profile["expression"]["relationship_seed"] == "刚刚被创造，对用户充满好奇"
+    assert '["bad-seed"]' not in (workspace_path / "SOUL_PROFILE.md").read_text(encoding="utf-8")
+
+    audit_files = list((workspace_path / "soul_logs" / "init").glob("*-初始化审计.json"))
+    assert len(audit_files) == 1
+    audit_payload = json.loads(audit_files[0].read_text(encoding="utf-8"))
+    assert audit_payload["result"]["profile_source"] == "fallback"
+
+
 def test_soul_init_uses_llm_generated_soul_and_profile(tmp_path, monkeypatch):
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"

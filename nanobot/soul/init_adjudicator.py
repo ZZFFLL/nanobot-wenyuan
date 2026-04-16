@@ -101,6 +101,9 @@ class SoulInitAdjudicator:
     def _profile_error(self, profile: dict) -> str:
         if not isinstance(profile, dict):
             return "SOUL_PROFILE 候选非法: 顶层结构必须是对象"
+        expression_error = self._expression_error(profile.get("expression"))
+        if expression_error:
+            return expression_error
         personality = profile.get("personality")
         relationship = profile.get("relationship")
         companionship = profile.get("companionship")
@@ -113,6 +116,18 @@ class SoulInitAdjudicator:
         companionship_error = self._companionship_error(companionship)
         if companionship_error:
             return companionship_error
+        return ""
+
+    def _expression_error(self, expression: object) -> str:
+        if expression is None:
+            return ""
+        if not isinstance(expression, dict):
+            return "SOUL_PROFILE 候选非法: expression 必须是对象"
+        for key in ("personality_seed", "relationship_seed"):
+            if key not in expression:
+                continue
+            if not isinstance(expression.get(key), str):
+                return f"SOUL_PROFILE 候选非法: expression.{key} 必须是字符串"
         return ""
 
     def _personality_error(self, personality: dict | None) -> str:
