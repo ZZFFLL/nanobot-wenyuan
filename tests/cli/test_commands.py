@@ -303,6 +303,63 @@ def test_soul_init_enables_default_config_without_explicit_config(tmp_path, monk
     assert saved.agents.defaults.soul.enabled is True
 
 
+def test_soul_init_only_governance_and_soul_uses_governance_template_written_in_same_run(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(config.model_dump(mode="json", by_alias=True), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    governance_template = {
+        "init": {
+            "allowed_stages": ["还不认识", "熟悉"],
+            "relationship_boundary_min": 0.5,
+            "boundary_expression_min": 0.5,
+            "require_profile_projection_for_soul": False,
+            "allow_soul_only_without_profile": True,
+            "allow_existing_soul_seed_for_init": False,
+        }
+    }
+
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _cfg: None)
+    monkeypatch.setattr(
+        "nanobot.soul.init_files.load_workspace_template",
+        lambda filename: (
+            json.dumps(governance_template, ensure_ascii=False, indent=2) + "\n"
+            if filename == "SOUL_GOVERNANCE.json"
+            else (_ for _ in ()).throw(AssertionError(f"unexpected template request: {filename}"))
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "soul",
+            "init",
+            "--config",
+            str(config_path),
+            "--only",
+            "SOUL_GOVERNANCE.json",
+            "--only",
+            "SOUL.md",
+            "--force",
+        ],
+        input="治理模板允许的新性格\n治理模板允许的新关系\n",
+    )
+
+    assert result.exit_code == 0
+    assert (workspace_path / "SOUL.md").read_text(encoding="utf-8") == (
+        "# 性格\n\n治理模板允许的新性格\n\n# 初始关系\n\n治理模板允许的新关系\n"
+    )
+
+
 def test_soul_init_uses_llm_candidate_for_soul_and_profile(tmp_path, monkeypatch):
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"

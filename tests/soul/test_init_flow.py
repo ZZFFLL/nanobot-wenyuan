@@ -463,6 +463,41 @@ def test_soul_init_only_soul_force_fails_clearly_for_semantically_invalid_profil
     assert "relationship.trust" in result.stdout
 
 
+def test_write_selected_files_rejects_invalid_profile_override_before_writing_rebuild_targets(
+    tmp_path,
+):
+    from nanobot.soul.bootstrap import SoulInitPayload
+    from nanobot.soul.init_files import write_selected_files
+
+    invalid_profile = _profile(stage="熟悉")
+    invalid_profile["relationship"]["trust"] = "bad"
+
+    try:
+        write_selected_files(
+            tmp_path,
+            targets=["SOUL_PROFILE.md", "SOUL.md"],
+            payload=SoulInitPayload(
+                ai_name="温予安",
+                gender="女",
+                birthday="2026-04-01",
+                personality="payload 性格文本",
+                relationship="payload 关系文本",
+                user_name="阿峰",
+                user_birthday="1990-01-01",
+            ),
+            force=True,
+            profile_override=invalid_profile,
+        )
+    except ValueError as exc:
+        assert "SOUL_PROFILE.md" in str(exc)
+        assert "relationship.trust" in str(exc)
+    else:
+        raise AssertionError("expected invalid profile override to fail clearly")
+
+    assert not (tmp_path / "SOUL_PROFILE.md").exists()
+    assert not (tmp_path / "SOUL.md").exists()
+
+
 def test_collect_payload_for_targets_reuses_existing_soul_seed_when_governance_allows(tmp_path):
     from nanobot.soul.init_files import collect_payload_for_targets
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable
 
 from nanobot.soul.bootstrap import (
@@ -21,7 +22,7 @@ from nanobot.soul.events import EventsManager
 from nanobot.soul.heart import HeartManager, render_initial_heart_markdown
 from nanobot.soul.methodology import InitGovernance, load_init_governance
 from nanobot.soul.profile import SoulProfileManager
-from nanobot.soul.projection import project_initial_soul_markdown
+from nanobot.soul.projection import project_initial_soul_markdown, projectable_profile_error
 
 ALLOWED_INIT_FILES = (
     "IDENTITY.md",
@@ -122,7 +123,7 @@ def resolve_effective_init_governance(
         and (force or not governance_file.exists())
     )
     if will_write_governance:
-        return load_init_governance()
+        return _load_init_governance_from_template()
     return effective_governance
 
 
@@ -263,6 +264,9 @@ def write_selected_files(
                 personality_seed=payload.personality if payload is not None else "",
                 relationship_seed=payload.relationship if payload is not None else "",
             )
+            error = projectable_profile_error(profile)
+            if error:
+                raise ValueError(f"SOUL_PROFILE.md 内容非法: {error}")
             SoulProfileManager(workspace).write(profile)
             written_profile = profile
         else:
@@ -334,14 +338,21 @@ def write_selected_files(
 
 def _resolve_profile_source(workspace: Path, profile_override: dict | None) -> dict:
     if profile_override is not None:
+        error = projectable_profile_error(profile_override)
+        if error:
+            raise ValueError(f"SOUL_PROFILE.md 内容非法，无法重建 SOUL.md: {error}")
         return profile_override
     profile_file = workspace / "SOUL_PROFILE.md"
     if not profile_file.exists():
         raise ValueError("SOUL.md 初始化依赖 SOUL_PROFILE.md；请先初始化 SOUL_PROFILE.md")
     try:
-        return SoulProfileManager(workspace).read()
+        profile = SoulProfileManager(workspace).read()
     except json.JSONDecodeError as exc:
         raise ValueError("SOUL_PROFILE.md 格式非法，无法重建 SOUL.md") from exc
+    error = projectable_profile_error(profile)
+    if error:
+        raise ValueError(f"SOUL_PROFILE.md 内容非法，无法重建 SOUL.md: {error}")
+    return profile
 
 
 def can_initialize_soul_without_profile(
@@ -358,6 +369,14 @@ def can_initialize_soul_without_profile(
         not effective_governance.require_profile_projection_for_soul
         and effective_governance.allow_soul_only_without_profile
     )
+
+
+def _load_init_governance_from_template() -> InitGovernance:
+    template_text = load_workspace_template("SOUL_GOVERNANCE.json")
+    with TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        (workspace / "SOUL_GOVERNANCE.json").write_text(template_text, encoding="utf-8")
+        return load_init_governance(workspace)
 
 
 def _read_keyed_line(text: str, key: str) -> str:

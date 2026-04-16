@@ -77,7 +77,7 @@ class SoulProjectionError(RuntimeError):
 def project_initial_soul_markdown(profile: dict, *, use_expression_seed: bool = True) -> str:
     """Build init-time ``SOUL.md`` from structured profile state."""
 
-    _ensure_projectable_profile(profile, error_cls=ValueError)
+    ensure_projectable_profile(profile, error_cls=ValueError)
     personality = _project_personality_text(profile, use_expression_seed=use_expression_seed)
     relationship = _project_relationship_text(profile, use_expression_seed=use_expression_seed)
     return (
@@ -102,7 +102,7 @@ async def project_soul_from_profile(
     soul_file = workspace / "SOUL.md"
     current_soul_text = soul_file.read_text(encoding="utf-8") if soul_file.exists() else ""
     profile = profile_override if profile_override is not None else SoulProfileManager(workspace).read()
-    _ensure_projectable_profile(profile, error_cls=SoulProjectionError)
+    ensure_projectable_profile(profile, error_cls=SoulProjectionError)
     profile_text = json.dumps(profile, ensure_ascii=False, indent=2)
     core_anchor_text = _read_optional_text(workspace / "CORE_ANCHOR.md")
     soul_method_text = _read_optional_text(workspace / "SOUL_METHOD.md") or render_soul_method_markdown()
@@ -318,13 +318,17 @@ def _extract_section(text: str, heading: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def _ensure_projectable_profile(profile: dict, *, error_cls: type[Exception]) -> None:
-    error = _projectable_profile_error(profile)
+def ensure_projectable_profile(
+    profile: dict,
+    *,
+    error_cls: type[Exception] = ValueError,
+) -> None:
+    error = projectable_profile_error(profile)
     if error:
         raise error_cls(f"SOUL_PROFILE.md 内容非法，无法重建 SOUL.md: {error}")
 
 
-def _projectable_profile_error(profile: dict) -> str:
+def projectable_profile_error(profile: dict) -> str:
     if not isinstance(profile, dict):
         return "顶层结构必须是对象"
 
