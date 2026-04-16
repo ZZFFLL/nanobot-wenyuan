@@ -269,6 +269,41 @@ def test_write_selected_files_rebuilds_soul_from_persisted_profile_when_profile_
     )
 
 
+def test_write_selected_files_rejects_soul_only_when_governance_disallows_profileless_init(
+    tmp_path,
+):
+    from nanobot.soul.bootstrap import SoulInitPayload
+    from nanobot.soul.init_files import write_selected_files
+
+    governance = replace(
+        load_init_governance(),
+        require_profile_projection_for_soul=False,
+        allow_soul_only_without_profile=False,
+    )
+
+    try:
+        write_selected_files(
+            tmp_path,
+            targets=["SOUL.md"],
+            payload=SoulInitPayload(
+                ai_name="温予安",
+                gender="女",
+                birthday="2026-04-01",
+                personality="payload 性格文本",
+                relationship="payload 关系文本",
+                user_name="阿峰",
+                user_birthday="1990-01-01",
+            ),
+            force=True,
+            governance=governance,
+        )
+    except ValueError as exc:
+        assert "SOUL.md" in str(exc)
+        assert "SOUL_PROFILE.md" in str(exc)
+    else:
+        raise AssertionError("expected governance to reject profileless SOUL.md init")
+
+
 def test_soul_init_only_soul_force_rebuilds_from_existing_profile(tmp_path, monkeypatch):
     from nanobot.soul.projection import project_initial_soul_markdown
 
@@ -391,3 +426,45 @@ def test_collect_payload_for_targets_does_not_reuse_existing_soul_seed_by_defaul
         ("初始性格描述", "温柔但倔强，嘴硬心软，容易吃醋"),
         ("与用户的初始关系", "刚刚被创造，对用户充满好奇"),
     ]
+
+
+def test_required_fields_for_soul_profile_include_expression_seed_fields_without_llm():
+    from nanobot.soul.init_files import required_fields_for_targets
+
+    required = required_fields_for_targets(["SOUL_PROFILE.md"], use_llm=False)
+
+    assert "personality" in required
+    assert "relationship" in required
+
+
+def test_soul_init_only_profile_reuses_existing_soul_seed_when_governance_allows(
+    tmp_path, monkeypatch
+):
+    config_path, workspace = _write_config(tmp_path)
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_governance(workspace, allow_existing_soul_seed_for_init=True)
+    (workspace / "SOUL.md").write_text(
+        "# 性格\n\n来自既有 SOUL 的性格。\n\n# 初始关系\n\n来自既有 SOUL 的关系。\n",
+        encoding="utf-8",
+    )
+    (workspace / "IDENTITY.md").write_text(
+        'name: 温予安\ngender: 女\nbirthday: "2026-04-01"\norigin: Created on 2026-04-16\n',
+        encoding="utf-8",
+    )
+    (workspace / "USER.md").write_text(
+        "# 用户画像\n\n- 名字: 阿峰\n- 生日: 1990-01-01\n- 核心偏好: 待相处中逐步沉淀\n- 边界提醒: 需要通过长期互动持续校正\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _cfg: None)
+
+    result = runner.invoke(
+        app,
+        ["soul", "init", "--config", str(config_path), "--only", "SOUL_PROFILE.md", "--force"],
+    )
+
+    profile = SoulProfileManager(workspace).read()
+
+    assert result.exit_code == 0
+    assert profile["expression"]["personality_seed"] == "来自既有 SOUL 的性格。"
+    assert profile["expression"]["relationship_seed"] == "来自既有 SOUL 的关系。"

@@ -116,6 +116,8 @@ def required_fields_for_targets(targets: list[str], *, use_llm: bool = False) ->
             required.update({"user_name", "user_birthday"})
         elif target == "CORE_ANCHOR.md":
             required.add("ai_name")
+        elif target == "SOUL_PROFILE.md":
+            required.update({"personality", "relationship"})
         elif target == "HEART.md":
             required.update({"ai_name", "personality", "relationship"})
         elif target == "EVENTS.md":
@@ -215,6 +217,18 @@ def write_selected_files(
     resolved_targets = normalize_only_files(targets)
     written_profile: dict | None = None
     effective_governance = governance or load_init_governance(workspace)
+
+    if (
+        "SOUL.md" in resolved_targets
+        and "SOUL_PROFILE.md" not in resolved_targets
+        and not (workspace / "SOUL_PROFILE.md").exists()
+        and not can_initialize_soul_without_profile(
+            workspace,
+            targets=resolved_targets,
+            governance=effective_governance,
+        )
+    ):
+        raise ValueError("SOUL.md 初始化依赖 SOUL_PROFILE.md；当前工作区不存在该文件")
 
     for filename in resolved_targets:
         target = workspace / filename
