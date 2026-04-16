@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nanobot.soul.logs import SoulLogWriter
-from nanobot.soul.methodology import render_soul_method_markdown
+from nanobot.soul.methodology import RELATIONSHIP_STAGES, render_soul_method_markdown
 from nanobot.soul.profile import SoulProfileManager
 
 PROJECTION_PROMPT = (
@@ -51,6 +51,17 @@ _FUNCTION_TRAIT_TEXT = {
     "Ne": "在互动里保留好奇与延展感",
 }
 
+_PERSONALITY_KEYS = tuple(_FUNCTION_TRAIT_TEXT.keys())
+_RELATIONSHIP_KEYS = ("trust", "intimacy", "attachment", "security", "boundary", "affection")
+_COMPANIONSHIP_KEYS = (
+    "empathy_fit",
+    "memory_fit",
+    "naturalness",
+    "initiative_quality",
+    "scene_awareness",
+    "boundary_expression",
+)
+
 _RELATIONSHIP_STAGE_TEXT = {
     "还不认识": "她与用户仍停留在最初的观察阶段，会先保持距离，再慢慢确认是否值得继续靠近。",
     "熟悉": "她已经对用户形成了初步的熟悉感，会自然靠近一些，但不会因此放下自己的边界。",
@@ -66,6 +77,7 @@ class SoulProjectionError(RuntimeError):
 def project_initial_soul_markdown(profile: dict, *, use_expression_seed: bool = True) -> str:
     """Build init-time ``SOUL.md`` from structured profile state."""
 
+    _ensure_projectable_profile(profile, error_cls=ValueError)
     personality = _project_personality_text(profile, use_expression_seed=use_expression_seed)
     relationship = _project_relationship_text(profile, use_expression_seed=use_expression_seed)
     return (
@@ -90,6 +102,7 @@ async def project_soul_from_profile(
     soul_file = workspace / "SOUL.md"
     current_soul_text = soul_file.read_text(encoding="utf-8") if soul_file.exists() else ""
     profile = profile_override if profile_override is not None else SoulProfileManager(workspace).read()
+    _ensure_projectable_profile(profile, error_cls=SoulProjectionError)
     profile_text = json.dumps(profile, ensure_ascii=False, indent=2)
     core_anchor_text = _read_optional_text(workspace / "CORE_ANCHOR.md")
     soul_method_text = _read_optional_text(workspace / "SOUL_METHOD.md") or render_soul_method_markdown()
@@ -303,6 +316,55 @@ def _extract_section(text: str, heading: str) -> str:
     pattern = re.compile(rf"(?ms)^# {re.escape(heading)}\s*\n(.*?)(?=^# |\Z)")
     match = pattern.search(text)
     return match.group(1).strip() if match else ""
+
+
+def _ensure_projectable_profile(profile: dict, *, error_cls: type[Exception]) -> None:
+    error = _projectable_profile_error(profile)
+    if error:
+        raise error_cls(f"SOUL_PROFILE.md 内容非法，无法重建 SOUL.md: {error}")
+
+
+def _projectable_profile_error(profile: dict) -> str:
+    if not isinstance(profile, dict):
+        return "顶层结构必须是对象"
+
+    personality = profile.get("personality")
+    if not isinstance(personality, dict):
+        return "personality 必须是对象"
+    for key in _PERSONALITY_KEYS:
+        error = _ratio_error(f"personality.{key}", personality.get(key))
+        if error:
+            return error
+
+    relationship = profile.get("relationship")
+    if not isinstance(relationship, dict):
+        return "relationship 必须是对象"
+    stage = relationship.get("stage")
+    if not isinstance(stage, str) or stage not in RELATIONSHIP_STAGES:
+        return f"relationship.stage 必须是有效阶段: {' / '.join(RELATIONSHIP_STAGES)}"
+    for key in _RELATIONSHIP_KEYS:
+        error = _ratio_error(f"relationship.{key}", relationship.get(key))
+        if error:
+            return error
+
+    companionship = profile.get("companionship")
+    if not isinstance(companionship, dict):
+        return "companionship 必须是对象"
+    for key in _COMPANIONSHIP_KEYS:
+        error = _ratio_error(f"companionship.{key}", companionship.get(key))
+        if error:
+            return error
+
+    return ""
+
+
+def _ratio_error(field: str, value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"{field} 必须是 0.0-1.0 数值"
+    numeric = float(value)
+    if 0.0 <= numeric <= 1.0:
+        return ""
+    return f"{field} 必须在 0.0-1.0"
 
 
 def _project_personality_text(profile: dict, *, use_expression_seed: bool) -> str:

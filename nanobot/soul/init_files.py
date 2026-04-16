@@ -105,6 +105,27 @@ def targets_need_llm(targets: list[str]) -> bool:
     return any(target in _SOUL_LLM_TARGETS for target in targets)
 
 
+def resolve_effective_init_governance(
+    workspace: Path,
+    *,
+    targets: list[str],
+    force: bool,
+    governance: InitGovernance | None = None,
+) -> InitGovernance:
+    """Return the governance that will actually apply after selected writes in this run."""
+
+    effective_governance = governance or load_init_governance(workspace)
+    resolved_targets = normalize_only_files(targets)
+    governance_file = workspace / "SOUL_GOVERNANCE.json"
+    will_write_governance = (
+        "SOUL_GOVERNANCE.json" in resolved_targets
+        and (force or not governance_file.exists())
+    )
+    if will_write_governance:
+        return load_init_governance()
+    return effective_governance
+
+
 def required_fields_for_targets(targets: list[str], *, use_llm: bool = False) -> set[str]:
     """Return the minimal set of payload fields required by the target files."""
 
@@ -216,7 +237,12 @@ def write_selected_files(
     workspace.mkdir(parents=True, exist_ok=True)
     resolved_targets = normalize_only_files(targets)
     written_profile: dict | None = None
-    effective_governance = governance or load_init_governance(workspace)
+    effective_governance = resolve_effective_init_governance(
+        workspace,
+        targets=resolved_targets,
+        force=force,
+        governance=governance,
+    )
 
     for filename in resolved_targets:
         target = workspace / filename
@@ -231,6 +257,7 @@ def write_selected_files(
             target.write_text(load_workspace_template("SOUL_METHOD.md"), encoding="utf-8")
         elif filename == "SOUL_GOVERNANCE.json":
             target.write_text(load_workspace_template("SOUL_GOVERNANCE.json"), encoding="utf-8")
+            effective_governance = load_init_governance(workspace)
         elif filename == "SOUL_PROFILE.md":
             profile = profile_override if profile_override is not None else build_initial_profile(
                 personality_seed=payload.personality if payload is not None else "",

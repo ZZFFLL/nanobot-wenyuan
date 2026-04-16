@@ -305,6 +305,39 @@ def test_write_selected_files_rejects_soul_only_when_governance_disallows_profil
         raise AssertionError("expected governance to reject profileless SOUL.md init")
 
 
+def test_write_selected_files_uses_governance_written_earlier_in_same_command(tmp_path):
+    from nanobot.soul.bootstrap import SoulInitPayload
+    from nanobot.soul.init_files import write_selected_files
+
+    _write_governance(
+        tmp_path,
+        require_profile_projection_for_soul=False,
+        allow_soul_only_without_profile=True,
+    )
+
+    try:
+        write_selected_files(
+            tmp_path,
+            targets=["SOUL_GOVERNANCE.json", "SOUL.md"],
+            payload=SoulInitPayload(
+                ai_name="温予安",
+                gender="女",
+                birthday="2026-04-01",
+                personality="payload 性格文本",
+                relationship="payload 关系文本",
+                user_name="阿峰",
+                user_birthday="1990-01-01",
+            ),
+            force=True,
+            governance=load_init_governance(tmp_path),
+        )
+    except ValueError as exc:
+        assert "SOUL.md" in str(exc)
+        assert "SOUL_PROFILE.md" in str(exc)
+    else:
+        raise AssertionError("expected same-run governance overwrite to block profileless SOUL.md init")
+
+
 def test_write_selected_files_skips_existing_soul_without_force_before_governance_rejection(
     tmp_path,
 ):
@@ -406,6 +439,28 @@ def test_soul_init_only_soul_force_fails_clearly_for_malformed_profile(tmp_path,
     assert result.exit_code == 2
     assert "SOUL_PROFILE.md" in result.stdout
     assert "格式非法" in result.stdout
+
+
+def test_soul_init_only_soul_force_fails_clearly_for_semantically_invalid_profile(
+    tmp_path, monkeypatch
+):
+    config_path, workspace = _write_config(tmp_path)
+    workspace.mkdir(parents=True, exist_ok=True)
+    invalid_profile = _profile(stage="熟悉")
+    invalid_profile["relationship"]["trust"] = "bad"
+    SoulProfileManager(workspace).write(invalid_profile)
+
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _cfg: None)
+
+    result = runner.invoke(
+        app,
+        ["soul", "init", "--config", str(config_path), "--only", "SOUL.md", "--force"],
+    )
+
+    assert result.exit_code == 2
+    assert "SOUL_PROFILE.md" in result.stdout
+    assert "非法" in result.stdout
+    assert "relationship.trust" in result.stdout
 
 
 def test_collect_payload_for_targets_reuses_existing_soul_seed_when_governance_allows(tmp_path):
