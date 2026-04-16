@@ -1571,7 +1571,7 @@ def _read_soul_init_audit_result(
     projected_soul_markdown = (
         (workspace / "SOUL.md").read_text(encoding="utf-8")
         if (workspace / "SOUL.md").exists()
-        else run_result.adjudicated.soul_markdown
+        else ""
     )
     return {
         "heart_markdown": heart_markdown,

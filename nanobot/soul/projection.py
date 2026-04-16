@@ -364,6 +364,16 @@ def projectable_profile_error(profile: dict) -> str:
     if not isinstance(profile, dict):
         return "顶层结构必须是对象"
 
+    expression = profile.get("expression")
+    if expression is not None:
+        if not isinstance(expression, dict):
+            return "expression 必须是对象"
+        for key in ("personality_seed", "relationship_seed"):
+            if key in expression:
+                error = _string_seed_error(f"expression.{key}", expression.get(key))
+                if error:
+                    return error
+
     personality = profile.get("personality")
     if not isinstance(personality, dict):
         return "personality 必须是对象"
@@ -401,6 +411,12 @@ def _ratio_error(field: str, value: object) -> str:
     if 0.0 <= numeric <= 1.0:
         return ""
     return f"{field} 必须在 0.0-1.0"
+
+
+def _string_seed_error(field: str, value: object) -> str:
+    if isinstance(value, str):
+        return ""
+    return f"{field} 必须是字符串"
 
 
 def _project_personality_text(profile: dict, *, use_expression_seed: bool) -> str:

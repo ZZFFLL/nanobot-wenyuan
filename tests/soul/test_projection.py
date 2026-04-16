@@ -55,6 +55,27 @@ def test_project_initial_soul_markdown_ignores_non_profile_text():
     assert "更稳定的信任" in content
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("personality_seed", {"bad": "value"}),
+        ("personality_seed", ["bad"]),
+        ("personality_seed", False),
+        ("relationship_seed", {"bad": "value"}),
+        ("relationship_seed", ["bad"]),
+        ("relationship_seed", True),
+    ],
+)
+def test_project_initial_soul_markdown_rejects_invalid_expression_seed_types(field, value):
+    from nanobot.soul.projection import project_initial_soul_markdown
+
+    profile = _profile(stage="熟悉")
+    profile["expression"] = {field: value}
+
+    with pytest.raises(ValueError, match=rf"expression\.{field} 必须是字符串"):
+        project_initial_soul_markdown(profile)
+
+
 @pytest.mark.asyncio
 async def test_project_soul_from_profile_uses_llm_and_writes_markdown(tmp_path):
     from nanobot.soul.projection import project_soul_from_profile
@@ -206,3 +227,29 @@ async def test_project_soul_from_profile_still_rejects_invalid_present_values(tm
             provider=provider,
             model="test-model",
         )
+
+
+@pytest.mark.asyncio
+async def test_project_soul_from_profile_rejects_invalid_expression_seed_types(tmp_path):
+    from nanobot.soul.projection import SoulProjectionError, project_soul_from_profile
+
+    profile = _profile(stage="熟悉")
+    profile["expression"] = {"personality_seed": {"bad": "value"}}
+    SoulProfileManager(tmp_path).write(profile)
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(
+        return_value=SimpleNamespace(
+            content="# 性格\n\n不该被用到。\n\n# 初始关系\n\n不该被用到。\n"
+        )
+    )
+
+    with pytest.raises(
+        SoulProjectionError,
+        match=r"SOUL_PROFILE\.md 内容非法，无法重建 SOUL\.md: expression\.personality_seed 必须是字符串",
+    ):
+        await project_soul_from_profile(
+            tmp_path,
+            provider=provider,
+            model="test-model",
+        )
+    provider.chat_with_retry.assert_not_awaited()
