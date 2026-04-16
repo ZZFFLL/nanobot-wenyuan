@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from nanobot.cli.commands import app
 from nanobot.config.schema import Config
 from nanobot.soul.methodology import load_init_governance
+from nanobot.soul.init_files import FileInitAction
 from nanobot.soul.profile import SoulProfileManager
 
 runner = CliRunner()
@@ -302,6 +303,40 @@ def test_write_selected_files_rejects_soul_only_when_governance_disallows_profil
         assert "SOUL_PROFILE.md" in str(exc)
     else:
         raise AssertionError("expected governance to reject profileless SOUL.md init")
+
+
+def test_write_selected_files_skips_existing_soul_without_force_before_governance_rejection(
+    tmp_path,
+):
+    from nanobot.soul.bootstrap import SoulInitPayload
+    from nanobot.soul.init_files import write_selected_files
+
+    governance = replace(
+        load_init_governance(),
+        require_profile_projection_for_soul=False,
+        allow_soul_only_without_profile=False,
+    )
+    soul_path = tmp_path / "SOUL.md"
+    soul_path.write_text("# 性格\n\n旧性格。\n\n# 初始关系\n\n旧关系。\n", encoding="utf-8")
+
+    actions = write_selected_files(
+        tmp_path,
+        targets=["SOUL.md"],
+        payload=SoulInitPayload(
+            ai_name="温予安",
+            gender="女",
+            birthday="2026-04-01",
+            personality="payload 性格文本",
+            relationship="payload 关系文本",
+            user_name="阿峰",
+            user_birthday="1990-01-01",
+        ),
+        force=False,
+        governance=governance,
+    )
+
+    assert actions == [FileInitAction(filename="SOUL.md", status="skipped")]
+    assert soul_path.read_text(encoding="utf-8") == "# 性格\n\n旧性格。\n\n# 初始关系\n\n旧关系。\n"
 
 
 def test_soul_init_only_soul_force_rebuilds_from_existing_profile(tmp_path, monkeypatch):

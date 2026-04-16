@@ -218,18 +218,6 @@ def write_selected_files(
     written_profile: dict | None = None
     effective_governance = governance or load_init_governance(workspace)
 
-    if (
-        "SOUL.md" in resolved_targets
-        and "SOUL_PROFILE.md" not in resolved_targets
-        and not (workspace / "SOUL_PROFILE.md").exists()
-        and not can_initialize_soul_without_profile(
-            workspace,
-            targets=resolved_targets,
-            governance=effective_governance,
-        )
-    ):
-        raise ValueError("SOUL.md 初始化依赖 SOUL_PROFILE.md；当前工作区不存在该文件")
-
     for filename in resolved_targets:
         target = workspace / filename
         existed = target.exists()
@@ -264,6 +252,16 @@ def write_selected_files(
                     raise ValueError(f"{filename} 初始化需要有效的 payload")
                 target.write_text(build_core_anchor_markdown(payload), encoding="utf-8")
             elif filename == "SOUL.md":
+                if (
+                    "SOUL_PROFILE.md" not in resolved_targets
+                    and not (workspace / "SOUL_PROFILE.md").exists()
+                    and not can_initialize_soul_without_profile(
+                        workspace,
+                        targets=resolved_targets,
+                        governance=effective_governance,
+                    )
+                ):
+                    raise ValueError("SOUL.md 初始化依赖 SOUL_PROFILE.md；当前工作区不存在该文件")
                 if effective_governance.require_profile_projection_for_soul:
                     use_expression_seed = written_profile is not None
                     target.write_text(
