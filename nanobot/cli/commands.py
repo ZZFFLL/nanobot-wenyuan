@@ -1584,12 +1584,14 @@ def soul_init(
     from nanobot.config.loader import get_config_path, load_config, save_config, set_config_path
     from nanobot.soul.bootstrap import SoulInitPayload, bootstrap_workspace, infer_adjudicated_soul_init
     from nanobot.soul.init_files import (
+        can_initialize_soul_without_profile,
         collect_payload_for_targets,
         normalize_only_files,
         required_fields_for_targets,
         targets_need_llm,
         write_selected_files,
     )
+    from nanobot.soul.methodology import load_init_governance
 
     # Determine workspace
     resolved_config_path = Path(config).expanduser().resolve() if config else get_config_path()
@@ -1621,10 +1623,15 @@ def soul_init(
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
 
+        governance = load_init_governance(ws)
         pending_targets = [target for target in targets if force or not (ws / target).exists()]
         if "SOUL.md" in pending_targets and "SOUL_PROFILE.md" not in pending_targets:
             profile_file = ws / "SOUL_PROFILE.md"
-            if not profile_file.exists():
+            if not profile_file.exists() and not can_initialize_soul_without_profile(
+                ws,
+                targets=targets,
+                governance=governance,
+            ):
                 console.print("[red]SOUL.md 初始化依赖 SOUL_PROFILE.md；当前工作区不存在该文件[/red]")
                 raise typer.Exit(2)
 
@@ -1638,10 +1645,13 @@ def soul_init(
                 provider = None
 
         required_fields = required_fields_for_targets(pending_targets, use_llm=use_llm)
+        if "SOUL.md" in pending_targets and not governance.require_profile_projection_for_soul:
+            required_fields.update({"personality", "relationship"})
         payload = collect_payload_for_targets(
             ws,
             required_fields=required_fields,
             prompt_fn=lambda label, default: typer.prompt(label, default=default),
+            governance=governance,
         )
 
         heart_markdown_override: str | None = None
@@ -1678,6 +1688,7 @@ def soul_init(
                 force=force,
                 heart_markdown_override=heart_markdown_override,
                 profile_override=profile_override,
+                governance=governance,
             )
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")

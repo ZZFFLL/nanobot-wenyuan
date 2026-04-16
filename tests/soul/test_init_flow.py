@@ -1,11 +1,13 @@
 """Focused tests for SOUL init ordering and force-rebuild semantics."""
 
 import json
+from dataclasses import replace
 
 from typer.testing import CliRunner
 
 from nanobot.cli.commands import app
 from nanobot.config.schema import Config
+from nanobot.soul.methodology import load_init_governance
 from nanobot.soul.profile import SoulProfileManager
 
 runner = CliRunner()
@@ -54,6 +56,24 @@ def _write_config(tmp_path):
         encoding="utf-8",
     )
     return config_path, workspace
+
+
+def _write_governance(workspace, **init_overrides):
+    governance = {
+        "init": {
+            "allowed_stages": ["还不认识", "熟悉"],
+            "relationship_boundary_min": 0.5,
+            "boundary_expression_min": 0.5,
+            "require_profile_projection_for_soul": True,
+            "allow_soul_only_without_profile": False,
+            "allow_existing_soul_seed_for_init": False,
+        }
+    }
+    governance["init"].update(init_overrides)
+    (workspace / "SOUL_GOVERNANCE.json").write_text(
+        json.dumps(governance, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def test_bootstrap_workspace_writes_profile_before_projected_soul(tmp_path, monkeypatch):
@@ -162,6 +182,35 @@ def test_soul_init_only_soul_force_fails_without_profile(tmp_path, monkeypatch):
     assert result.exit_code == 2
     assert "SOUL_PROFILE.md" in result.stdout
     assert "不存在" in result.stdout
+
+
+def test_soul_init_only_soul_force_allows_direct_seeded_rebuild_when_governance_enables_it(
+    tmp_path, monkeypatch
+):
+    config_path, workspace = _write_config(tmp_path)
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_governance(
+        workspace,
+        require_profile_projection_for_soul=False,
+        allow_soul_only_without_profile=True,
+    )
+    (workspace / "SOUL.md").write_text(
+        "# 性格\n\n旧性格。\n\n# 初始关系\n\n旧关系。\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _cfg: None)
+
+    result = runner.invoke(
+        app,
+        ["soul", "init", "--config", str(config_path), "--only", "SOUL.md", "--force"],
+        input="治理允许的新性格\n治理允许的新关系\n",
+    )
+
+    assert result.exit_code == 0
+    assert (workspace / "SOUL.md").read_text(encoding="utf-8") == (
+        "# 性格\n\n治理允许的新性格\n\n# 初始关系\n\n治理允许的新关系\n"
+    )
 
 
 def test_write_selected_files_persists_soul_only_from_profile(tmp_path):
@@ -287,3 +336,58 @@ def test_soul_init_only_soul_force_fails_clearly_for_malformed_profile(tmp_path,
     assert result.exit_code == 2
     assert "SOUL_PROFILE.md" in result.stdout
     assert "格式非法" in result.stdout
+
+
+def test_collect_payload_for_targets_reuses_existing_soul_seed_when_governance_allows(tmp_path):
+    from nanobot.soul.init_files import collect_payload_for_targets
+
+    (tmp_path / "SOUL.md").write_text(
+        "# 性格\n\n来自既有 SOUL 的性格。\n\n# 初始关系\n\n来自既有 SOUL 的关系。\n",
+        encoding="utf-8",
+    )
+    governance = replace(load_init_governance(), allow_existing_soul_seed_for_init=True)
+    prompts: list[tuple[str, str]] = []
+
+    payload = collect_payload_for_targets(
+        tmp_path,
+        required_fields={"personality", "relationship"},
+        prompt_fn=lambda label, default: prompts.append((label, default)) or "should-not-be-used",
+        governance=governance,
+    )
+
+    assert payload is not None
+    assert payload.personality == "来自既有 SOUL 的性格。"
+    assert payload.relationship == "来自既有 SOUL 的关系。"
+    assert prompts == []
+
+
+def test_collect_payload_for_targets_does_not_reuse_existing_soul_seed_by_default(tmp_path):
+    from nanobot.soul.init_files import collect_payload_for_targets
+
+    (tmp_path / "SOUL.md").write_text(
+        "# 性格\n\n来自既有 SOUL 的性格。\n\n# 初始关系\n\n来自既有 SOUL 的关系。\n",
+        encoding="utf-8",
+    )
+    prompts: list[tuple[str, str]] = []
+
+    def _prompt(label: str, default: str) -> str:
+        prompts.append((label, default))
+        if "初始性格描述" in label:
+            return "新的性格输入"
+        if "初始关系" in label:
+            return "新的关系输入"
+        return default
+
+    payload = collect_payload_for_targets(
+        tmp_path,
+        required_fields={"personality", "relationship"},
+        prompt_fn=_prompt,
+    )
+
+    assert payload is not None
+    assert payload.personality == "新的性格输入"
+    assert payload.relationship == "新的关系输入"
+    assert prompts == [
+        ("初始性格描述", "温柔但倔强，嘴硬心软，容易吃醋"),
+        ("与用户的初始关系", "刚刚被创造，对用户充满好奇"),
+    ]

@@ -5,6 +5,9 @@
       "熟悉"
     ],
     "relationship_boundary_min": 0.5,
-    "boundary_expression_min": 0.5
+    "boundary_expression_min": 0.5,
+    "require_profile_projection_for_soul": true,
+    "allow_soul_only_without_profile": false,
+    "allow_existing_soul_seed_for_init": false
   }
 }

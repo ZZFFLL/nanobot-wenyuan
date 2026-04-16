@@ -13,11 +13,13 @@ from nanobot.soul.bootstrap import (
     build_core_anchor_markdown,
     build_identity_markdown,
     build_initial_profile,
+    build_soul_markdown,
     build_user_markdown,
     load_workspace_template,
 )
 from nanobot.soul.events import EventsManager
 from nanobot.soul.heart import HeartManager, render_initial_heart_markdown
+from nanobot.soul.methodology import InitGovernance, load_init_governance
 from nanobot.soul.profile import SoulProfileManager
 from nanobot.soul.projection import project_initial_soul_markdown
 
@@ -129,13 +131,18 @@ def collect_payload_for_targets(
     *,
     required_fields: set[str],
     prompt_fn: Callable[[str, str], str],
+    governance: InitGovernance | None = None,
 ) -> SoulInitPayload | None:
     """Build a payload from existing workspace state, prompting only for missing required fields."""
 
     if not required_fields:
         return None
 
-    existing = read_existing_seed(workspace)
+    effective_governance = governance or load_init_governance(workspace)
+    existing = read_existing_seed(
+        workspace,
+        allow_existing_soul_seed_for_init=effective_governance.allow_existing_soul_seed_for_init,
+    )
     values: dict[str, str] = {}
     for field, default in _PROMPT_DEFAULTS.items():
         existing_value = existing.get(field, "").strip()
@@ -147,7 +154,11 @@ def collect_payload_for_targets(
     return SoulInitPayload(**values)
 
 
-def read_existing_seed(workspace: Path) -> dict[str, str]:
+def read_existing_seed(
+    workspace: Path,
+    *,
+    allow_existing_soul_seed_for_init: bool = False,
+) -> dict[str, str]:
     """Extract reusable seed values from existing workspace files."""
 
     seed: dict[str, str] = {
@@ -177,6 +188,13 @@ def read_existing_seed(workspace: Path) -> dict[str, str]:
         if seed["user_birthday"] == "待了解":
             seed["user_birthday"] = ""
 
+    if allow_existing_soul_seed_for_init:
+        soul = workspace / "SOUL.md"
+        if soul.exists():
+            text = soul.read_text(encoding="utf-8")
+            seed["personality"] = _read_heading_section(text, "性格")
+            seed["relationship"] = _read_heading_section(text, "初始关系")
+
     return seed
 
 
@@ -188,6 +206,7 @@ def write_selected_files(
     force: bool,
     heart_markdown_override: str | None = None,
     profile_override: dict | None = None,
+    governance: InitGovernance | None = None,
 ) -> list[FileInitAction]:
     """Write only the selected files, respecting skip/force semantics."""
 
@@ -195,6 +214,7 @@ def write_selected_files(
     workspace.mkdir(parents=True, exist_ok=True)
     resolved_targets = normalize_only_files(targets)
     written_profile: dict | None = None
+    effective_governance = governance or load_init_governance(workspace)
 
     for filename in resolved_targets:
         target = workspace / filename
@@ -230,14 +250,19 @@ def write_selected_files(
                     raise ValueError(f"{filename} 初始化需要有效的 payload")
                 target.write_text(build_core_anchor_markdown(payload), encoding="utf-8")
             elif filename == "SOUL.md":
-                use_expression_seed = written_profile is not None
-                target.write_text(
-                    project_initial_soul_markdown(
-                        _resolve_profile_source(workspace, written_profile),
-                        use_expression_seed=use_expression_seed,
-                    ),
-                    encoding="utf-8",
-                )
+                if effective_governance.require_profile_projection_for_soul:
+                    use_expression_seed = written_profile is not None
+                    target.write_text(
+                        project_initial_soul_markdown(
+                            _resolve_profile_source(workspace, written_profile),
+                            use_expression_seed=use_expression_seed,
+                        ),
+                        encoding="utf-8",
+                    )
+                else:
+                    if payload is None:
+                        raise ValueError("SOUL.md 初始化需要有效的 payload")
+                    target.write_text(build_soul_markdown(payload), encoding="utf-8")
             elif filename == "HEART.md":
                 if payload is None and heart_markdown_override is None:
                     raise ValueError(f"{filename} 初始化需要有效的 payload")
@@ -278,6 +303,22 @@ def _resolve_profile_source(workspace: Path, profile_override: dict | None) -> d
         return SoulProfileManager(workspace).read()
     except json.JSONDecodeError as exc:
         raise ValueError("SOUL_PROFILE.md 格式非法，无法重建 SOUL.md") from exc
+
+
+def can_initialize_soul_without_profile(
+    workspace: Path,
+    *,
+    targets: list[str],
+    governance: InitGovernance | None = None,
+) -> bool:
+    effective_governance = governance or load_init_governance(workspace)
+    resolved_targets = normalize_only_files(targets)
+    if "SOUL.md" not in resolved_targets or "SOUL_PROFILE.md" in resolved_targets:
+        return False
+    return (
+        not effective_governance.require_profile_projection_for_soul
+        and effective_governance.allow_soul_only_without_profile
+    )
 
 
 def _read_keyed_line(text: str, key: str) -> str:

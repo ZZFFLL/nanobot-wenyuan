@@ -54,6 +54,9 @@ _FALLBACK_SOUL_GOVERNANCE = {
         "allowed_stages": ["还不认识", "熟悉"],
         "relationship_boundary_min": 0.5,
         "boundary_expression_min": 0.5,
+        "require_profile_projection_for_soul": True,
+        "allow_soul_only_without_profile": False,
+        "allow_existing_soul_seed_for_init": False,
     }
 }
 
@@ -65,6 +68,9 @@ class InitGovernance:
     allowed_stages: tuple[str, ...]
     relationship_boundary_min: float
     boundary_expression_min: float
+    require_profile_projection_for_soul: bool
+    allow_soul_only_without_profile: bool
+    allow_existing_soul_seed_for_init: bool
 
 
 def build_default_profile() -> dict:
@@ -132,6 +138,18 @@ def load_init_governance(workspace: Path | None = None) -> InitGovernance:
             payload.get("boundary_expression_min"),
             default=float(_FALLBACK_SOUL_GOVERNANCE["init"]["boundary_expression_min"]),
         ),
+        require_profile_projection_for_soul=_coerce_bool(
+            payload.get("require_profile_projection_for_soul"),
+            default=bool(_FALLBACK_SOUL_GOVERNANCE["init"]["require_profile_projection_for_soul"]),
+        ),
+        allow_soul_only_without_profile=_coerce_bool(
+            payload.get("allow_soul_only_without_profile"),
+            default=bool(_FALLBACK_SOUL_GOVERNANCE["init"]["allow_soul_only_without_profile"]),
+        ),
+        allow_existing_soul_seed_for_init=_coerce_bool(
+            payload.get("allow_existing_soul_seed_for_init"),
+            default=bool(_FALLBACK_SOUL_GOVERNANCE["init"]["allow_existing_soul_seed_for_init"]),
+        ),
     )
 
 
@@ -179,3 +197,15 @@ def _coerce_ratio(value: object, *, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, min(1.0, number))
+
+
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return default
